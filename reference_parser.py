@@ -1,4 +1,4 @@
-from re import match
+import re
 from typing import *
 import os.path
 from sys import stderr
@@ -21,6 +21,7 @@ class ParseIssue(Enum):
     GivenInvalidSize = "Sizes must be a valid type"
     UnsizedArrayParameter = "All unterminated arrays must be given a size"
     ReferenceSignatureMismatch = "The signatures in `ref.c' and `props' differ"
+    InvalidIdentifierName = "All names must be valid C identifiers"
 
 
 @dataclass
@@ -82,7 +83,7 @@ class CParameter:
         :param param: the parameter definition
         :return: an instance from that definition
         """
-        m = match("((?:int|char|float|double|bool|void)[* ]+)(.*)", param)
+        m = re.match("((?:int|char|float|double|bool|void)[* ]+)(.*)", param)
         if m is None:
             raise Exception("invalid parameter")
 
@@ -118,7 +119,7 @@ class FunctionSignature:
         :param sig: the signature
         :return: the instance built from that signature
         """
-        m = match("(.*)\((.*)\)", sig)
+        m = re.match("(.*)\((.*)\)", sig)
         if m is None:
             raise Exception("broken...")
 
@@ -258,7 +259,7 @@ class CReference:
             line = ""  # this is just to ensure line has SOME value, to shut the warning up
             for line in ref:
                 line = line.lstrip()
-                if match("(int|float|double|char|bool|void)", line):
+                if re.match("(int|float|double|char|bool|void)", line):
                     break  # assumes everything from here is the actual function
 
                 if line.startswith("#include"):
@@ -335,6 +336,12 @@ class FunctionReference:
                 array_params.add(name)
             else:
                 issues.add(ParseIssue.MultiLevelPointer)
+
+            # this is a SUPER simplified version of checking for valid C identifiers
+            # doesn't take keywords etc. into consideration
+            m = re.match("^[a-zA-Z_]\w*$", name, flags=re.ASCII)
+            if not m or m[0] != name:
+                issues.add(ParseIssue.InvalidIdentifierName)
 
         for output in self.info.outputs:
             if param_dict[output].pointer_level == 0:
