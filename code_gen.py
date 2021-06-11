@@ -4,6 +4,7 @@ from typing import *
 from dataclasses import dataclass
 from enum import Enum
 import reference_parser
+import utilities
 
 CCode = NewType("CCode", str)
 
@@ -458,11 +459,59 @@ class CReference:
         return f"{includes}{self.code}{self.main()}"
 
     def get_strlens(self) -> List[CCode]:
+        """
+        Build the calls to get any string parameters sizes.
+
+        These are passed in as arguments, in the order the strings appear.
+        This process reserves the identifier <arr>_len for all strings,
+        where <arr> is the name of the string parameter.
+
+        :return: the C code for getting string lengths
+        """
         strlen_template = "int {arr_size} = atoi(argv[{idx}]);"
         unsized = [param.arr_size for param in self.parameters
                    if isinstance(param.c_type, ArrayCType) and param.c_type.size is None]
 
         return [strlen_template.format(arr_size=arr_size, idx=idx) for idx, arr_size in enumerate(unsized, start=1)]
+
+    def compile(self, exe: str = None, cleanup: bool = True) -> Optional[str]:
+        """
+        Compile the function.
+
+        :param exe: the name of the executable to compile to. If :code:`None` then a random string will be used
+        :param cleanup: set to :code:`True` to remove the source file afterwards
+        :return: the name of the executable. Returns :code:`None` if compilation failed
+        """
+        if exe is None:
+            exe = utilities.get_tmp_file(self.program(), ".o")
+
+        root, ext = os.path.splitext(exe)
+
+        if ext not in {".o", ""}:
+            raise Exception("invalid executable given")
+
+        src = root+".c"
+
+        if os.path.exists(exe) or os.path.exists(src):
+            ack = input(f"overwrite {exe}/{src}? [yN]\n")
+            if ack == "y" or ack == "Y":
+                print("overwriting...")
+            else:
+                print("not overwriting!")
+                return None
+
+        with open(src, "w") as f:
+            f.write(self.program())
+
+        _, stderr = utilities.run_command(f"gcc -Wall -O0 -o {exe} {src}")
+        if stderr:
+            sys.stderr.write(stderr)
+        print("COMPILED")
+
+        if cleanup:
+            utilities.run_command(f"rm {src}")
+
+        return exe
 
 
 if __name__ == "__main__":
@@ -472,8 +521,12 @@ if __name__ == "__main__":
 
     parser.add_argument("program", help="the program to use")
     parser.add_argument("-p", "--path", help="path to the directory contatining the program", default=".")
+    parser.add_argument("-c", "--compile", help="pass to compile the function", action="store_true")
 
     args = parser.parse_args()
 
     parsed = CReference.parse(args.program, args.path)
-    print(parsed.program())
+    if args.compile:
+        parsed.compile(exe="tmp.o", cleanup=False)
+    else:
+        print(parsed.program())
