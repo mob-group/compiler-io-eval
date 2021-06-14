@@ -421,6 +421,10 @@ class CReference:
 
         return scalar_params + array_params
 
+    @property
+    def outputs(self):
+        return [param for param in self.parameters if param.is_output]
+
     def main(self) -> CCode:
         """
         Build the main function for this reference.

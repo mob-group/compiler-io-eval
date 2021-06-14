@@ -119,7 +119,7 @@ class FunctionSignature:
         :param sig: the signature
         :return: the instance built from that signature
         """
-        m = re.match("(.*)\((.*)\)", sig)
+        m = re.match(r"(.*)\((.*)\)", sig)
         if m is None:
             raise Exception("broken...")
 
@@ -339,7 +339,7 @@ class FunctionReference:
 
             # this is a SUPER simplified version of checking for valid C identifiers
             # doesn't take keywords etc. into consideration
-            m = re.match("^[a-zA-Z_]\w*$", name, flags=re.ASCII)
+            m = re.match(r"^[a-zA-Z_]\w*$", name, flags=re.ASCII)
             if not m or m[0] != name:
                 issues.add(ParseIssue.InvalidIdentifierName)
 
