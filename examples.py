@@ -6,7 +6,12 @@ from typing import *
 # turn back now, regex grossness ahead
 # if this breaks somewhere down the line just replace it with a JSON reader or something
 
-Example = Tuple[list, Any, list]
+ScalarCValue = Union[int, float, str]
+ArrayCValue = Union[List[ScalarCValue], str]
+SomeCValue = Union[ScalarCValue, ArrayCValue]
+AnyCValue = Union[SomeCValue, None]
+
+Example = Tuple[List[SomeCValue], AnyCValue, List[SomeCValue]]
 
 
 @dataclass
@@ -18,6 +23,33 @@ class ExampleCollection:
     ret_type: CType
     outputs: List[CParameter]
     examples: List[Example]
+
+    @property
+    def transposed_examples(self) -> Tuple[List[List[SomeCValue]], List[AnyCValue], List[List[SomeCValue]]]:
+        """
+        Allows the examples to be switched from a long list of "flat" examples to a flat list of parameters.
+
+        The original list has **n** examples where each example is a tuple of shape (**m**, 1, **o**).
+        The new list will have a shape of (**m*n**, **n**, **o*n**).
+
+        :return: the examples in the new shape
+        """
+        inps = [[] for _ in self.inputs]
+        rets = []
+        outps = [[] for _ in self.outputs]
+
+        for example in self.examples:
+            ex_inps, ex_ret, ex_outps = example
+
+            for inp, ex_inp in zip(inps, ex_inps):
+                inp.append(ex_inp)
+
+            rets.append(ex_ret)
+
+            for inp, ex_outp in zip(outps, ex_outps):
+                inp.append(ex_outp)
+
+        return inps, rets, outps
 
     @staticmethod
     def parse(sig: str, examples: List[str]):

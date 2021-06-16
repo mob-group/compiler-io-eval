@@ -8,6 +8,9 @@ import logging
 import time
 from typing import Callable, Any, Optional
 
+def get_tmp_file_name(content: str, extension: str = '') -> str:
+    return uuid.uuid4().hex + extension
+
 
 def get_tmp_file(content: str, extension: str = '') -> str:
     filename = uuid.uuid4().hex + extension

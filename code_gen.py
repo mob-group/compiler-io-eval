@@ -123,6 +123,7 @@ class ScalarCType(Enum):
         return Template(template, {"placeholder": self.placeholder()}, ["name"])
 
 
+@dataclass(init=False)
 class VoidCType:
     def __init__(self):
         self.c_repr = "void"
@@ -357,6 +358,15 @@ class CReference:
         """
         return {param.name: param for param in self.parameters}
 
+    @property
+    def sizes(self) -> Set[str]:
+        sizes = set()
+        for param in self.parameters:
+            if isinstance(param, ArrayCType) and param.size is not None:
+                sizes.add(param.size)
+
+        return sizes
+
     @staticmethod
     def get_c_type(type_info: reference_parser.CType) -> AnyCType:
         """
@@ -437,11 +447,15 @@ class CReference:
         scanfs = '\n'.join(param.get_scanf() for param in self.read_order)
         func_call = self.get_func_call()
 
-        # ensures either non-void return is printed, or output arrays
+        output_printfs = '\n'.join(param.get_printf() for param in self.parameters if param.is_output)
         if isinstance(self.c_type, VoidCType):
-            printfs = '\n'.join(param.get_printf() for param in self.parameters if param.is_output)
+            printfs = output_printfs
         else:
-            printfs = f'printf("{self.c_type.placeholder()}", res);'
+            return_printf = self.c_type.printf_template()
+            return_printf.fill(placeholder=self.c_type.placeholder(), name="res")
+            return_printf = return_printf.complete()
+
+            printfs =  return_printf + output_printfs
 
         return f'''
         int main(int argc, char *argv[]) {{
@@ -487,7 +501,7 @@ class CReference:
         :return: the name of the executable. Returns :code:`None` if compilation failed
         """
         if exe is None:
-            exe = utilities.get_tmp_file(self.program(), ".o")
+            exe = utilities.get_tmp_file_name(self.program(), ".o")
 
         root, ext = os.path.splitext(exe)
 
@@ -496,7 +510,7 @@ class CReference:
 
         src = root+".c"
 
-        if os.path.exists(exe) or os.path.exists(src):
+        if os.path.exists(exe):
             ack = input(f"overwrite {exe}/{src}? [yN]\n")
             if ack == "y" or ack == "Y":
                 print("overwriting...")
