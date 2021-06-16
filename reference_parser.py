@@ -22,6 +22,8 @@ class ParseIssue(Enum):
     UnsizedArrayParameter = "All unterminated arrays must be given a size"
     ReferenceSignatureMismatch = "The signatures in `ref.c' and `props' differ"
     InvalidIdentifierName = "All names must be valid C identifiers"
+    ReturnAndOutputGiven = "Functions should not be able to return a value and change output parameters"
+    NoOutputGiven = "Functions must output some values, either through a return value or output parameters"
 
 
 @dataclass
@@ -368,6 +370,11 @@ class FunctionReference:
 
         if ref_signature != self.signature:
             issues.add(ParseIssue.ReferenceSignatureMismatch)
+
+        if self.signature.type.contents != "void" and self.info.outputs:
+            issues.add(ParseIssue.ReturnAndOutputGiven)
+        elif self.signature.type.contents == "void" and not self.info.outputs:
+            issues.add(ParseIssue.NoOutputGiven)
 
         return issues
 

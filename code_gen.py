@@ -326,7 +326,7 @@ class CReference:
             sys.stderr.write("Parse created issues!\n")
             sys.stderr.write("\n".join(issue.value for issue in issues))
 
-        ignored_issues = {reference_parser.ParseIssue.ArrayReturnType}
+        ignored_issues = {reference_parser.ParseIssue.ArrayReturnType, reference_parser.ParseIssue.ReturnAndOutputGiven}
         if issues - ignored_issues:
             raise Exception("did not produce a valid parse")
 
