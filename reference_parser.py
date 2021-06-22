@@ -23,6 +23,13 @@ class ParseIssue(Enum):
     ReferenceSignatureMismatch = "The signatures in `ref.c' and `props' differ"
     InvalidIdentifierName = "All names must be valid C identifiers"
 
+    @staticmethod
+    def ignorable():
+        return {
+            ParseIssue.ArrayReturnType,
+            ParseIssue.ScalarGivenSize,
+        }
+
 
 @dataclass
 class CType:
@@ -205,6 +212,12 @@ class FunctionArrayInfo:
 
         return FunctionArrayInfo(outputs, sizes)
 
+    def is_output(self, param: CParameter) -> bool:
+        return param.name in self.outputs
+
+    def size(self, param: CParameter) -> str:
+        return {size.array: size.var for size in self.sizes}.get(param.name)
+
 
 @dataclass
 class FunctionProps:
@@ -283,9 +296,25 @@ class FunctionReference:
     def type(self):
         return self.signature.type
 
-    @property
-    def parameters(self):
-        return self.signature.parameters
+    def parameters(self, safe_order=False) -> List[CParameter]:
+        if not safe_order:
+            return self.signature.parameters
+
+        sized = []
+        params = []
+        for parameter in self.signature.parameters:
+            if self.info.size(parameter) is None:
+                params.append(parameter)
+            else:
+                sized.append(parameter)
+
+        for parameter in sized:
+            params.append(parameter)
+
+        return params
+
+    def outputs(self):
+        return [ parameter for parameter in self.parameters() if self.info.is_output(parameter) ]
 
     @property
     def name(self):
@@ -325,7 +354,7 @@ class FunctionReference:
         param_dict = dict()
         array_params = set()
         scalar_params = set()
-        for param in self.parameters:
+        for param in self.parameters():
             name = param.name
             c_type = param.type
 
