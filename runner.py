@@ -12,47 +12,64 @@ ScalarCType = Union[ctypes.c_int, ctypes.c_float, ctypes.c_double, ctypes.c_char
 
 
 class CArray:
+    parameter = None
     scalar_type = None
     output = None
-    refs = None
 
     @classmethod
     def from_param(cls, obj: ArrayValue):
         if cls.scalar_type == ctypes.c_char:
-            s = bytes(obj, "ASCII")
+            s = obj.encode("ASCII")
 
             if cls.output:
                 raise Exception("output strings are not supported")
-                #return ctypes.create_string_buffer(s)
+                # return ctypes.create_string_buffer(s)
             else:
                 return ctypes.c_char_p(s)
 
         arr_type = cls.scalar_type * len(obj)
         val = arr_type(*obj)
 
-        # this is kinda gross
         if cls.output:
-            cls.refs.append(val)
+            # TODO: edit this to use proper setter function
+            cls.parameter.set_value(val)
 
         return val
 
 
 class Parameter:
-    def __init__(self, name: str, c_type: CType, is_output: bool, refs: list):
+    def __init__(self, name: str, c_type: CType, is_output: bool,):
         self.name = name
         self.is_output = is_output
+        self.output_val = None
 
         if c_type.pointer_level == 0:
             self.c_type = self.get_scalar_type(c_type.contents)
         elif c_type.pointer_level == 1:
             scalar_type = self.get_scalar_type(c_type.contents)
-            self.c_type = type(f"{c_type.contents.capitalize()}Array",
+            self.c_type = type(f"{c_type.contents.capitalize()}Array_{self.name}",
                                (CArray,),
-                               { "scalar_type": scalar_type,
-                                 "output": is_output,
-                                 "refs": refs})
+                               {"scalar_type": scalar_type,
+                                "output": is_output,
+                                "parameter": self,
+                                })
         else:
             raise Exception("multi-level pointers are not supported")
+
+    @property
+    def value(self) -> SomeValue:
+        assert self.is_output
+
+        try:
+            # value is a string
+            return self.output_val.value.decode()
+        except Exception:
+            # value is a normal array
+            return self.output_val[:]
+
+    # for some reason the @value.setter wasn't working
+    def set_value(self, value: ctypes.Array):
+        self.output_val = value
 
     @staticmethod
     def get_scalar_type(c_type_name: str):
@@ -77,14 +94,12 @@ class Function:
         reference_path = os.path.join(path, reference)
 
         ref = FunctionReference.parse(reference_path)
-        if (issues := ref.validate() - ParseIssue.ignorable()):
+        if issues := ref.validate() - ParseIssue.ignorable():
             raise Exception(f"bad input: {'; '.join(issue.value for issue in issues)}")
 
         exe = getattr(ctypes.CDLL("mega_ref.so"), reference)
 
-        self.out_vals = []
-
-        self.parameters = tuple(Parameter(param.name, param.type, ref.info.is_output(param), self.out_vals)
+        self.parameters = tuple(Parameter(param.name, param.type, ref.info.is_output(param))
                                 for param in ref.parameters())
 
         self.add_return_type(exe, ref.type)
@@ -98,9 +113,7 @@ class Function:
         return self.exe(*args)
 
     def outputs(self):
-        out_params = [param.name for param in self.parameters if param.is_output]
-
-        return { param: val for param, val in zip(out_params, self.out_vals) }
+        return {param.name: param.value for param in self.parameters if param.is_output}
 
     @staticmethod
     def add_return_type(exe, ret_type):
