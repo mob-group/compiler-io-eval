@@ -455,7 +455,7 @@ def show_all(base_path: str) -> None:
         print(parsed.signature.c_sig())
 
 
-def show_single(base_path: str, prog_name: str) -> None:
+def show_single(path_to_ref: str) -> None:
     """
     Parse and display the signature for a single program.
 
@@ -464,10 +464,20 @@ def show_single(base_path: str, prog_name: str) -> None:
     :param base_path: the full path to the directory containing a function
     :param prog_name: the name of the function directory
     """
-    contents = FunctionReference.parse(os.path.join(base_path, prog_name))
+    contents = FunctionReference.parse(path_to_ref)
     print(dumps(asdict(contents), indent=4))
     contents.show_issues(verbose=True)
 
+def load_reference(path_to_reference: str, check_issues=True) -> FunctionReference:
+    func = FunctionReference.parse(path_to_reference)
+
+    if check_issues:
+        issues = func.validate()
+        if issues - ParseIssue.ignorable():
+            func.show_issues()
+            raise Exception("parse contained issues")
+
+    return func
 
 if __name__ == "__main__":
     import argparse
@@ -476,7 +486,7 @@ if __name__ == "__main__":
 
     parser.add_argument("-a", "--all", help="display and debug all available references", action="store_true")
     parser.add_argument("program", nargs="?", help="parse and output the given program")
-    parser.add_argument("-p", "--path", help="path to example directory", default=".")
+    parser.add_argument("-p", "--path", help="specify root path to example", default=".")
 
     args = parser.parse_args()
 
@@ -488,4 +498,4 @@ if __name__ == "__main__":
     if args.all:
         show_all(args.path)
     else:
-        show_single(args.path, args.program)
+        show_single(os.path.join(args.path, args.program))

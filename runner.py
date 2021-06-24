@@ -1,6 +1,8 @@
 import ctypes
 from typing import *
 import os.path
+
+import reference_parser
 from reference_parser import FunctionReference, CType, ParseIssue
 
 ScalarValue = Union[int, float, bool, str]
@@ -90,19 +92,13 @@ class Parameter:
 
 
 class Function:
-    def __init__(self, reference: str, path: str):
-        reference_path = os.path.join(path, reference)
+    def __init__(self, reference: FunctionReference, lib_path: str):
+        exe = getattr(ctypes.CDLL(lib_path), reference.name)
 
-        ref = FunctionReference.parse(reference_path)
-        if issues := ref.validate() - ParseIssue.ignorable():
-            raise Exception(f"bad input: {'; '.join(issue.value for issue in issues)}")
+        self.parameters = tuple(Parameter(param.name, param.type, reference.info.is_output(param))
+                                for param in reference.parameters())
 
-        exe = getattr(ctypes.CDLL("mega_ref.so"), reference)
-
-        self.parameters = tuple(Parameter(param.name, param.type, ref.info.is_output(param))
-                                for param in ref.parameters())
-
-        self.add_return_type(exe, ref.type)
+        self.add_return_type(exe, reference.type)
         exe.argtypes = (param.c_type for param in self.parameters)
 
         self.exe = exe
@@ -130,9 +126,10 @@ class Function:
 
 if __name__ == '__main__':
     path = "/Users/sami/Documents/haxx/internship/synthesis-eval/examples/"
-    prog = "matmul"
+    prog = "subeq"
 
-    func = Function(prog, path)
+    ref = reference_parser.FunctionReference.parse(os.path.join(path, prog))
+    func = Function(ref, "mega_ref.so")
 
     ret = func.run(a=[1, 2, 3, 4, 5], b=[10, 9, 8, 7, 6], n=5)
 
