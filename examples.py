@@ -16,18 +16,29 @@ base_str = "({inputs}) {value} ({outputs})"
 
 @dataclass
 class ExampleInstance:
+    """
+    Contains the values for one example
+    """
     inputs: ParameterMapping
     value: AnyValue
     outputs: ParameterMapping
 
-    def generate(self, inputs: TypeMapping, value: CType, outputs: TypeMapping) -> str:
-        inp_vals = [generate_value(self.inputs[name], c_type)
+    def form(self, inputs: TypeMapping, value: CType, outputs: TypeMapping) -> str:
+        """
+        Creates a formatted string representation of the example.
+
+        :param inputs: the types of all of the input values
+        :param value: the return type
+        :param outputs: the types of the output values
+        :return: the formatted string
+        """
+        inp_vals = [form_value(self.inputs[name], c_type)
                     for name, c_type in inputs]
-        outp_vals = [generate_value(self.outputs[name], c_type)
+        outp_vals = [form_value(self.outputs[name], c_type)
                      for name, c_type in outputs]
 
         return base_str.format(inputs=", ".join(inp_vals),
-                               value=generate_value(self.value, value),
+                               value=form_value(self.value, value),
                                outputs=", ".join(outp_vals))
 
     @staticmethod
@@ -35,7 +46,7 @@ class ExampleInstance:
         """
             Parses an example
 
-            Details of the example format can be found in the :code:`parse` method.
+            Details of the example format can be found in the :code:`parse` function.
 
             :param s: the string to parse
             :param inputs: parsers for the input values
@@ -92,23 +103,23 @@ class ExampleInstance:
         return ExampleInstance(input_vals, ret_val, output_vals)
 
 
-def generate(reference: FunctionReference, examples: list[ExampleInstance]) -> list[str]:
+def form(reference: FunctionReference, examples: list[ExampleInstance]) -> list[str]:
     inputs = [(param.name, param.type) for param in reference.parameters()]
     value = reference.type
     outputs = [(param.name, param.type) for param in reference.outputs()]
 
-    return generate_examples(inputs, value, outputs, examples)
+    return form_examples(inputs, value, outputs, examples)
 
 
-def generate_examples(inputs: TypeMapping, value: CType, outputs: TypeMapping,
-                      examples: list[ExampleInstance]) -> list[str]:
-    sig_str = [generate_ref(inputs, value, outputs)]
-    example_strs = [ex.generate(inputs, value, outputs) for ex in examples]
+def form_examples(inputs: TypeMapping, value: CType, outputs: TypeMapping,
+                  examples: list[ExampleInstance]) -> list[str]:
+    sig_str = [form_ref(inputs, value, outputs)]
+    example_strs = [ex.form(inputs, value, outputs) for ex in examples]
 
     return sig_str + example_strs
 
 
-def generate_ref(inputs: TypeMapping, value: CType, outputs: TypeMapping) -> str:
+def form_ref(inputs: TypeMapping, value: CType, outputs: TypeMapping) -> str:
     inps = [str(CParameter(name, c_type)) for name, c_type in inputs]
     outps = [str(CParameter(name, c_type)) for name, c_type in outputs]
 
@@ -117,7 +128,7 @@ def generate_ref(inputs: TypeMapping, value: CType, outputs: TypeMapping) -> str
                            outputs=", ".join(outps))
 
 
-def generate_value(val: AnyValue, c_type: CType) -> str:
+def form_value(val: AnyValue, c_type: CType) -> str:
     if c_type == CType("char", 1):
         return f'"{val}"'
     elif c_type == CType("void", 0):
@@ -213,7 +224,7 @@ def parse_examples(inputs: ParserMapping, value: Parser, outputs: ParserMapping,
 
     return vals
 
-
+# Parsers for supported types
 def parse_int(s: str) -> (int, str):
     if (m := match(r"\s*(-?\d+)", s)) is not None:
         return int(m[1]), s[m.end():]
@@ -249,7 +260,7 @@ def parse_string(s: str) -> (str, str):
         return None
 
 
-def parse_list(s: str, elem) -> (list, str):
+def parse_list(s: str, elem: Parser) -> (list, str):
     if (m := match(r"\s*\[", s)) is None:
         return None
 
@@ -312,8 +323,3 @@ def parser_for(c_type: CType) -> Parser:
         return parse_bool
     else:
         raise Exception(f"no parser exists for type: {c_type}")
-
-if __name__ == '__main__':
-    stuff = parse("(char *s, char c, int a) int (char *s)", ['("hello", "o", 3) 10 ("wow")', '("ooh", \'p\', 1) 13 ("wow")', '("very cool", \'!\', 15) 85 ("wow")',])
-    stuff
-

@@ -1,12 +1,18 @@
-import os.path
-import runner
+import utilities
 from reference_parser import FunctionReference, CParameter, load_reference
 from randomiser import Randomiser
-from runner import Function
-from examples import ExampleInstance, ParameterMapping, parse, generate
+from runner import Function, SomeValue, create
+from examples import ExampleInstance, ParameterMapping, parse, form
 
 
 class Generator:
+    """
+    Generates examples
+
+    To generate examples this class produces a random input,
+    runs it on a "correct" version of the function,
+    and then retrieves the output produced by that code.
+    """
     def __init__(self, reference: FunctionReference, runner: Function):
         self.reference = reference
         self.runner = runner
@@ -15,11 +21,22 @@ class Generator:
         self.randomiser = Randomiser(seed=random_seed)
 
     def generate(self, n: int) -> list[ExampleInstance]:
+        """
+        Used to generate multiple examples
+
+        :param n: the number of examples to make
+        :return: the examples generated
+        """
         assert n > 0
 
         return [self.generate_single() for _ in range(n)]
 
     def generate_single(self) -> ExampleInstance:
+        """
+        Used to generate one example
+
+        :return: the example generated
+        """
         inputs = {}
         for param in self.reference.parameters(safe_order=True):
             self.random(param, inputs)
@@ -30,7 +47,17 @@ class Generator:
 
         return ExampleInstance(inputs, value, outputs)
 
-    def random(self, parameter: CParameter, current: ParameterMapping):
+    def random(self, parameter: CParameter, current: ParameterMapping) -> SomeValue:
+        """
+        Generate a random value for an input parameter
+
+        As some parameters depend on others, this function needs to know the values of parameters already generated.
+        Hopefully this will be called in an order where dependencies are generated before their dependents.
+
+        :param parameter: the parameter to generate a value for
+        :param current: the values already generated
+        :return: the new parameter value
+        """
         assert 0 <= parameter.type.pointer_level < 2
 
         scalar_type = parameter.type.contents
@@ -68,18 +95,36 @@ class Generator:
         return val
 
     def write(self, examples: list[ExampleInstance], file_name: str):
+        """
+        Writes the given examples to a file
+
+        :param examples: examples to write
+        :param file_name: file to write into
+        """
         with open(file_name, "w") as f:
-            output = generate(self.reference, examples)
+            output = form(self.reference, examples)
             f.writelines(f"{line}\n" for line in output)
 
 
+Result = tuple[int, int, list[str]]
+
+
 class Evaluator:
+    """
+    Evaluates functions on examples
+    """
     def __init__(self, reference: FunctionReference, runner: Function):
         self.reference = reference
         self.runner = runner
 
     @staticmethod
     def read(example_file: str) -> list[ExampleInstance]:
+        """
+        Parses an example file into examples to use
+
+        :param example_file: the file containing examples
+        :return: the examples in the file
+        """
         with open(example_file, "r") as f:
             sig = f.readline()
             examples = f.readlines()
@@ -87,9 +132,27 @@ class Evaluator:
         return parse(sig, examples)
 
     def transform(self, examples: list[ExampleInstance]):
+        """
+        Currently useless, put all cleanup code for examples here
+
+        TODO: some smarter stuff
+
+        For example could pair up misnamed examples,
+        infer size variables for arrays,
+        etc.
+
+        :param examples: the examples to fix
+        :return: the fixed examples
+        """
         return examples
 
     def check_example(self, example: ExampleInstance) -> bool:
+        """
+        Runs an example and checks whether the result matches the expected
+
+        :param example: the example to use
+        :return: whether or not the output of the example matches the expected output
+        """
         val = self.runner.run(**example.inputs)
 
         if val != example.value:
@@ -104,7 +167,13 @@ class Evaluator:
 
         return True
 
-    def check(self, examples: list[ExampleInstance]) -> tuple[int, int, list[str]]:
+    def check(self, examples: list[ExampleInstance]) -> Result:
+        """
+        Evaluates many examples, uses :code:`check_example`
+
+        :param examples: the examples to evaluate
+        :return: a tuple of the form (number of successes, number of trials, [details of failures])
+        """
         examples = self.transform(examples)
         passes = 0
         failures = []
@@ -116,23 +185,84 @@ class Evaluator:
             else:
                 failures.append(str(example))
 
-        return (passes, len(examples), failures)
+        return passes, len(examples), failures
+
+
+def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
+    """
+    Helper method to check a reference function against examples
+
+    :param ref: the reference of the function
+    :param run: the executable of the function
+    :param ex_file: the examples to evaluate with
+    :return: the evaluation result of the test
+    """
+    e = Evaluator(ref, run)
+    examples = e.read(ex_file)
+    return e.check(examples)
+
+
+def generate(ref: FunctionReference, run: Function, n: int, ex_file: str = None) -> list[ExampleInstance]:
+    """
+    Helper method to produce examples to check against a function
+
+    :param ref: the reference of the function
+    :param run: the executable of the function
+    :param n: the number of examples to make
+    :param ex_file: the file to save the examples into, if :code:`None` then don't write anywhere
+    :return: the examples produced
+    """
+    g = Generator(ref, run)
+    examples = g.generate(n)
+
+    if ex_file is not None:
+        g.write(examples, ex_file)
+
+    return examples
 
 
 if __name__ == '__main__':
-    path = "/Users/sami/Documents/haxx/internship/synthesis-eval/examples/"
-    prog = "vfill"
+    import argparse
 
-    ref = load_reference(os.path.join(path, prog))
-    exe = runner.Function(ref, "mega_ref.so")
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument("ref", help="path to the reference program")
 
-    g = Generator(ref, exe)
-    examples = g.generate(50)
-    examples_file = f"{prog}_examples"
-    g.write(examples, examples_file)
+    subparsers = argparser.add_subparsers()
 
-    e = Evaluator(ref, exe)
-    print(e.check(examples))
+    eval_parser = subparsers.add_parser("eval")
+    eval_parser.add_argument("-e", "--examples", help="path to file containing examples")
+    eval_parser.add_argument("program", help="path to the program to evaluate")
 
-    examples2 = Evaluator.read(examples_file)
-    print(e.check(examples2))
+    gen_parser = subparsers.add_parser("gen")
+    gen_parser.add_argument("num_examples", type=int, help="number of examples to generate")
+    gen_parser.add_argument("examples", help="path to examples file to write")
+
+    args = argparser.parse_args()
+
+    ref = load_reference(args.ref)
+    try:
+        # assumes its an eval
+        run = create(args.ref, args.program)
+
+        if args.examples is None:
+            default_examples = 50
+
+            example_file = utilities.get_tmp_path()
+            generate(ref, run, default_examples, example_file)
+        else:
+            example_file = args.examples
+
+        passes, tests, failures = evaluate(ref, run, example_file)
+
+        assert passes == tests or failures
+
+        print(f"passed: {passes}/{tests}")
+        if failures:
+            print("failures:")
+            for fail in failures:
+                print(fail)
+    except AttributeError:
+        # its a gen instead
+        run = create(args.ref)
+        assert args.num_examples > 0
+        generate(ref, run, args.num_examples, args.examples)
