@@ -1,6 +1,5 @@
 import random
 import string
-from typing import Optional
 
 class Randomiser:
     def __init__(self, seed=None):

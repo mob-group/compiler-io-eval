@@ -1,1 +1,210 @@
 # compiler-io-eval
+
+This is a tool to benchmark compilers correctness,
+by testing a compiled functions output on a given set of I/O pairs to the function.
+This library provides a method of generating these pairs using [GCC](https://gcc.gnu.org/).
+A function can then be checked against these I/O pairs,
+to see if the compiled version produces the correct output.
+
+The library is modular, so it is made up of a few different components.
+
+## components
+
+ - reference_parser.py *
+ - runner.py
+ - examples.py
+ - randomiser.py
+ - evaluation.py *
+
+Components marked with a * are usable as a command line tool.
+
+### reference_parser
+
+This component extracts useful information from a reference,
+and can check the validity of a reference.
+Note, a reference is a directory containing a "ref.c" and "props" file.
+
+
+As a module this exposes the convenience function `load_reference`
+which provides a simpler interface for parsing a reference from a directory.
+
+As a command line tool it provides functionality to check a single or all references in a given location.
+Usage is as follows:
+
+    python3 reference_parser.py [-p PATH] [-a | PROGRAM]
+
+Here `PATH` denotes the location of the reference functions,
+and it defaults to the current directory.
+
+If the flag `-a` is given then all references in `PATH` are checked.
+This outputs the signature of all the functions to **stdout**, useful for testing,
+and outputs any issues with the references to **stderr**.
+
+If instead `PROGRAM` is given then that denotes the single reference to check.
+This will output a JSON representation of the reference if it is valid,
+otherwise it will write any issues to **stderr**.
+
+#### examples
+
+In the following directory structure, if the current directory was `/src`:
+
+    .
+    +-- src
+    |   +-- reference_parser.py
+    +-- examples
+    |   +-- a
+    |   |   +-- ref.c
+    |   |   +-- props
+    |   +-- b
+    |   |   +-- ref.c
+    |   |   +-- props
+
+Then you could run:
+
+    $ python3 reference_parser.py -p /examples a
+    $ python3 reference_parser.py -p /examples b
+
+to produce output for `a`/`b` individually.
+
+You could also run:
+
+    $ python3 reference_parser.py -p /examples -a
+
+which would produce a simplified output for both `a` and `b`.
+
+### runner.py
+
+This component contains the functionality for executing a reference function.
+It uses the `ctypes` library, which is able to run [shared objects](https://tldp.org/HOWTO/Program-Library-HOWTO/shared-libraries.html).
+All conversions between native and foreign types are handled here,
+so the use of the library is opaque to the programmer. 
+
+
+`runner.py` exposes the types `ScalarValue`, `ArrayValue`, `SomeValue`, `AnyValue`.
+These are used to denote the native Python versions of C types supported in this library.
+The meanings of scalar and array values should be obvious,
+except note that as Python lacks a `char` type both this and `char *` are defined as Python `str`'s.
+`SomeValue` is either a scalar or array value, and `AnyValue` differs from `SomeValue` only because it can be `None`/`void`.
+
+The method `create` is also exposed;
+this is a helper to set up an executable reference function.
+
+### examples.py
+
+This component handles **examples**, which in this use case are the I/O pairs for a reference.
+It exposes an `ExampleInstance` class to structure these,
+as well as the functions `parse` (which maps a string to an `ExampleInstance`)
+and `form` (which maps an `ExampleInstance` to a string).
+These two functions are the inverse of each other.
+
+The format for serialising an example is as follows:
+
+    EXAMPLE ::= "(" INPUTS ")" RETURN "(" OUTPUTS ")"
+    INPUTS  ::= VALUES
+    RETURN  ::= "_" | VALUE
+    OUTPUTS ::= EMPTY | VALUES
+    VALUES  ::= VALUE | VALUE "," VALUES
+    VALUE   ::= SCALAR | ARRAY
+    SCALAR  ::= INT | FLOAT | CHAR | BOOL
+    INT     ::= <any decimal integer>
+    FLOAT   ::= <any decimal floating point number>
+    CHAR    ::= "'" <a single character> "'"
+    BOOL    ::= True | False
+    ARRAY   ::= '"' <a string of characters> '"' | "[" (SCALAR ",")+ SCALAR "]" | "[]"
+
+### randomiser.py
+
+This component handles random element generation.
+It exposes the `Randomiser` class,
+which has a method to generate a random value for each of the supported types.
+
+### evaluation.py
+
+This component contains the functionality to generat
+and evaluate examples for a reference.
+
+It can be used as a command line tool, with two subcommands `eval` and `gen`.
+
+The first subcommand, `eval`, is used as follows:
+
+    python3 evaluation.py REFERENCE eval [-e EXAMPLES] PROGRAM
+
+This takes a program given in `PROGRAM` and evaluates it.
+The program should be an implementation of a function that can be compiled to a ".so" file,
+for example a ".c" source file, or an intermediate ".s" file.
+It gets the relevant information about this function
+from the reference directory `REFERENCE` and tests
+the program against the examples found in `EXAMPLES`.
+If no example file is given then examples are
+generated by compiling the reference function,
+for more detail see [example generation](#example-generation).
+
+The second subcommand is `gen`:
+
+    python3 evaluation.py REFERENCE gen NUM_EXAMPLES EXAMPLES
+
+This takes a reference directory `REFERENCE`,
+generates `NUM_EXAMPLES` examples from that reference
+and stores the results in the file `EXAMPLES`.
+
+This component also provides functions that do similar tasks,
+`generate` and `evaluate` for use as a module.
+
+## example generation
+
+This library provides an ability to generate examples for a reference function.
+The method for achieving this is simple but still powerful,
+although it does come with drawbacks. Examples are generated as follows:
+
+1. parse the function reference to find out what the I/O specification is
+2. build an executable version of the function (see [executing functions](#function-execution))
+3. randomly generate an input tuple
+4. run the function on the random input
+5. extract the return value and output parameters of that function call
+6. build an example from that input/output evaluation
+7. if more examples are required repeat from step 3
+
+In this way many examples can be produced easily.
+The only dependency of this method is that building the executable in step 2 produces a correct function,
+I have used GCC as my "ground truth".
+Therefore, as long as functions compiled with GCC produce the correct output,
+then examples generated in this way will have the correct result.
+
+This approach is also agnostic to how the inputs are generated,
+this means that a different technique could be used to sample the input space
+to test the function more efficiently.
+
+## function execution
+
+In order to run a reference function,
+which does not necessarily exist in a valid stand-alone C file,
+this library interacts with functions as shared objects.
+Compilation into this format varies between Linux and macOS
+and this library makes no effort to support multiple platforms,
+so if this is intended for use on a different system take care.
+The whole shared object infrastructure seems different for Windows,
+so even more work may be required to run this library there.
+
+The [ctypes](https://docs.python.org/3/library/ctypes.html) library
+is used to interface with these shared objects,
+so for more information on the internals visit their site.
+
+The approach this library uses is to compile
+and extract a function definition from a reference.
+At this point it is a callable Python object,
+which will acts as an interface to the C function.
+Unfortunately by default the function object has very little information
+about the function, so the next step is to provide the function with type information.
+"Type information" in this case means registering a class which can transform native Python types into an object that `ctypes` can work with.
+For scalar types this is simple, however as array types include their sizes these must be generated dynamically as values are passed to the function.
+As these `ctypes` objects are created dynamically they have to be registered somewhere if you would like to check their value outside the function call, as is the case with output parameters.
+In summary, the procedure for calling a reference function from Python is:
+
+1. parse the reference to find out I/O types
+2. compile the implementation to a shared object and load as a Python object
+3. generate and attach the input and return types to the function object
+4. call the function with input arguments
+    1. dynamically convert these native Python arguments to their `ctypes` counterpart
+    2. keep track of these `ctypes` objects if their value is required later
+5. extract the return value and output values after the function call
+

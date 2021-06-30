@@ -248,7 +248,10 @@ if __name__ == '__main__':
             default_examples = 50
 
             example_file = utilities.get_tmp_path()
-            generate(ref, run, default_examples, example_file)
+            # generate examples using the gcc compiled reference function
+            # NOT the sample implementation
+            example_run = create(args.ref)
+            generate(ref, example_run, default_examples, example_file)
         else:
             example_file = args.examples
 
