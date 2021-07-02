@@ -410,14 +410,14 @@ class FunctionReference:
         issues = self.validate()
 
         if issues:
-            stderr.write(f"error: {self.name} is broken!\n")
+            print(f"error: {self.name} is broken!", file=stderr)
             for issue in issues:
-                stderr.write(f" - {issue.value}\n")
+                print(f" - {issue.value}", file=stderr)
 
             if verbose:
-                stderr.write(dumps(asdict(self), indent=4) + "\n\n")
+                print(dumps(asdict(self), indent=4) + "\n", file=stderr)
         elif not ignore_good:
-            stderr.write(f"{self.name} is good\n")
+            print(f"{self.name} is good", file=stderr)
 
 
 def show_all(base_path: str) -> None:
@@ -492,7 +492,7 @@ if __name__ == "__main__":
 
     if (args.program is None) != args.all:  # this is confusing as hell, either program is set, or all is (XOR)
         parser.print_usage(file=stderr)
-        stderr.write(f"{parser.prog}: error: exactly one argument must be set from (--all, program)\n")
+        print(f"{parser.prog}: error: exactly one argument must be set from (--all, program)", file=stderr)
         exit(1)
 
     if args.all:
