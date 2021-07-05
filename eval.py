@@ -13,7 +13,7 @@ def test_hypothesis(ref: FunctionReference, impl: Function, impl_name: str, exam
     return passes == tests
 
 
-#def test_reference(ref_dir: os.DirEntry, impl_dir: Generator[os.DirEntry, None, None], num_examples: int) -> bool:
+# def test_reference(ref_dir: os.DirEntry, impl_dir: Generator[os.DirEntry, None, None], num_examples: int) -> bool:
 def test_reference(ref_dir: os.DirEntry, ref: FunctionReference, num_examples: int,
              impls: Generator[tuple[os.DirEntry, Function], None, None]) -> bool:
     try:
@@ -86,6 +86,7 @@ def test(refs_dir: str, impl_dir: str, num_examples: int):
         except Exception:
             continue
 
+
 def implementations(ref: os.DirEntry, impl_dir: str) -> Generator[tuple[os.DirEntry, Function], None, None]:
     if not os.path.isdir(impl_dir):
         return
@@ -114,12 +115,13 @@ def implementations(ref: os.DirEntry, impl_dir: str) -> Generator[tuple[os.DirEn
 
         yield impl_file, impl
 
+
 def references(refs_dir: str) -> Generator[tuple[os.DirEntry, FunctionReference], None, None]:
     if not os.path.isdir(refs_dir):
         return
 
     ref_dir: os.DirEntry
-    for ref_dir in os.scandir(refs_dir):
+    for ref_dir in sorted(os.scandir(refs_dir), key=lambda x: (x.is_dir(), x.name)):
         if not os.path.isdir(ref_dir):
             continue
 
@@ -157,7 +159,8 @@ if __name__ == '__main__':
                 sucesses += 1
 
             tests += 1
-        except Exception:
+        except Exception as e:
+            # print(e)
             continue
 
     print(f"passed ({sucesses}/{tests})")

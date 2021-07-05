@@ -222,7 +222,9 @@ def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str
         path_to_compilable = os.path.join(path_to_reference, ref_file)
 
     if lib_path is None:
-        lib_path = f"{utilities.get_tmp_path()}.so"
+        if not os.path.exists("_tmp"):
+            os.makedirs("_tmp")
+        lib_path = os.path.join("_tmp", f"{utilities.get_tmp_path()}.so")
 
     compile_lib(path_to_compilable, lib_path)
 

@@ -117,7 +117,7 @@ def form_examples(inputs: TypeMapping, value: CType, outputs: TypeMapping,
     example_strs = [ex.form(inputs, value, outputs) for ex in examples]
 
     return sig_str + example_strs
-
+arr = sorted(os.scandir(), key=lambda x: (x.is_dir(), x.name))
 
 def form_ref(inputs: TypeMapping, value: CType, outputs: TypeMapping) -> str:
     inps = [str(CParameter(name, c_type)) for name, c_type in inputs]
