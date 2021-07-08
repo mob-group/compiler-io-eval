@@ -1,4 +1,3 @@
-import lumberjack
 import os.path
 import re
 from dataclasses import dataclass, asdict
@@ -6,6 +5,8 @@ from enum import Enum
 from json import dumps
 from sys import stderr
 from typing import *
+
+import lumberjack
 
 
 class ParseIssue(Enum):
@@ -445,7 +446,6 @@ class FunctionReference:
         msg = f"{self.name} has issues: [{', '.join(issue.name for issue in issues)}]"
 
         logger.warn(msg)
-
 
 
 def show_all(base_path: str) -> None:

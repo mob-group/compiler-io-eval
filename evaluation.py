@@ -1,13 +1,12 @@
-import sys
-
-import utilities
 from textwrap import indent, dedent
+from typing import Optional, Any
+
+import lumberjack
+import utilities
 from examples import ExampleInstance, ParameterMapping, parse, form
 from randomiser import Randomiser
 from reference_parser import FunctionReference, CParameter, load_reference, UnsupportedTypeError
-import lumberjack
 from runner import Function, SomeValue, create, FunctionRunError
-from typing import Optional, Any
 
 
 class UnsatisfiedDependencyError(Exception):
@@ -118,6 +117,7 @@ class Generator:
         with open(file_name, "w") as f:
             output = form(self.reference, examples)
             f.writelines(f"{line}\n" for line in output)
+
 
 class Failure:
     def __init__(self, expected: ExampleInstance, value: Any, outputs: dict[str, Any]):

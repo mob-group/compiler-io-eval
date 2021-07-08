@@ -1,10 +1,10 @@
-import lumberjack
 import os
 import re
-from typing import *
-from textwrap import indent, dedent
-
 from datetime import datetime
+from textwrap import indent, dedent
+from typing import *
+
+import lumberjack
 from evaluation import generate, Evaluator, Result
 from examples import ExampleInstance
 from reference_parser import load_reference, FunctionReference, ParseError, UnsupportedTypeError
@@ -137,7 +137,7 @@ class ReferenceResult:
     @staticmethod
     def gen_report(results: list, verbose: bool, show_failures: bool = True, partitioned: bool = True) -> str:
         def stringify_many(items: Iterable) -> str:
-            assert verbose != False and show_failures == True #just a meaningless use case
+            assert verbose != False and show_failures == True  # just a meaningless use case
 
             return "\n".join(item.full(show_failures) if verbose else str(item) for item in items)
 

@@ -1,4 +1,3 @@
-import logging
-from logging import getLogger
+from logging import basicConfig, INFO, getLogger
 
-logging.basicConfig(level=logging.INFO, filename="benchmarking.log", encoding="utf-8")
+basicConfig(level=INFO, filename="benchmarking.log", encoding="utf-8")

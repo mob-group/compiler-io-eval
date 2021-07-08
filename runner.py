@@ -1,10 +1,9 @@
 import ctypes
-import lumberjack
-import os.path
 import math
-import sys
+import os.path
 from typing import *
 
+import lumberjack
 import reference_parser
 import utilities
 from reference_parser import FunctionReference, CType, UnsupportedTypeError
@@ -90,6 +89,7 @@ class Floating:
     @classmethod
     def from_param(cls, obj: float):
         return cls.floating_type(obj)
+
 
 class InvalidTypeError(Exception):
     pass
