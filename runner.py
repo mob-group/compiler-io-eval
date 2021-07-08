@@ -1,5 +1,6 @@
 import ctypes
 import os.path
+import math
 import sys
 from typing import *
 
@@ -52,7 +53,11 @@ class CArray:
             else:
                 return ctypes.c_char_p(s)
 
-        arr_type = cls.scalar_type * len(obj)
+        try:
+            arr_type = cls.scalar_type * len(obj)
+        except Exception as e:
+            arr_type = cls.scalar_type.floating_type * len(obj)
+
         val = arr_type(*obj)
 
         if cls.output:
@@ -61,6 +66,29 @@ class CArray:
 
         return val
 
+
+class Floating:
+    floating_type = None
+
+    def __init__(self, value: Union[ctypes.c_float, ctypes.c_double]):
+        self.value = value
+
+    def __eq__(self, other):
+        if self is other:
+            return True
+
+        if self.value == other.value:
+            return True
+
+        if math.isnan(self.value.value) and math.isnan(other.value.value):
+            # FIXME: change this back to True, this is just to help testing failures
+            return False
+
+        return False
+
+    @classmethod
+    def from_param(cls, obj: float):
+        return cls.floating_type(obj)
 
 class InvalidTypeError(Exception):
     pass
@@ -127,9 +155,9 @@ class Parameter:
         if c_type_name == "int":
             return ctypes.c_int
         elif c_type_name == "float":
-            return ctypes.c_float
+            return type("CustomFloat", (Floating,), {"floating_type": ctypes.c_float})
         elif c_type_name == "double":
-            return ctypes.c_double
+            return type("CustomDouble", (Floating,), {"floating_type": ctypes.c_double})
         elif c_type_name == "char":
             return ctypes.c_char
         elif c_type_name == "bool":
