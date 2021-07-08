@@ -116,7 +116,33 @@ class Generator:
             f.writelines(f"{line}\n" for line in output)
 
 
-Result = tuple[int, int, list[str]]
+class Result:
+    def __init__(self, passes: int, tests: int, failures: list[str], name: str = None):
+        assert passes >= 0 and tests >= 0  # len(failures) is implicitly >= 0
+        assert passes + len(failures) == tests
+
+        self.passes = passes
+        self.tests = tests
+        self.failures = failures
+        self.name = name
+
+    def passed(self) -> bool:
+        return self.passes == self.tests
+
+    def is_trivial(self) -> bool:
+        return self.tests == 0
+
+    def show(self):
+        print(f"passed: {self.passes}/{self.tests}")
+        if self.failures:
+            print("failures:")
+            for fail in self.failures:
+                print(fail)
+
+    def __str__(self):
+        status = "OK" if self.passed else "NOT OK"
+        name = "" if self.name is None else f"{self.name}: "
+        return f"{name}passed {self.passes}/{self.tests} tests ({status})"
 
 
 class Evaluator:
@@ -195,7 +221,7 @@ class Evaluator:
             else:
                 failures.append(str(example))
 
-        return passes, len(examples), failures
+        return Result(passes, len(examples), failures)
 
 
 def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
@@ -265,15 +291,7 @@ if __name__ == '__main__':
         else:
             example_file = args.examples
 
-        passes, tests, failures = evaluate(ref, run, example_file)
-
-        assert passes == tests or failures
-
-        print(f"passed: {passes}/{tests}")
-        if failures:
-            print("failures:")
-            for fail in failures:
-                print(fail)
+        evaluate(ref, run, example_file).show()
     except AttributeError:
         # it's a gen instead
         run = create(args.ref)

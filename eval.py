@@ -1,45 +1,19 @@
-from evaluation import evaluate, generate
-from reference_parser import load_reference, FunctionReference
-from runner import create, Function
-from typing import *
 import os
 import re
+from typing import *
+
+from evaluation import generate, Evaluator, Result
+from examples import ExampleInstance
+from reference_parser import load_reference, FunctionReference, ParseError, UnsupportedTypeError
+from runner import create_from, Function, CompilationError
 
 
-def test_hypothesis(ref: FunctionReference, impl: Function, impl_name: str, examples: str) -> bool:
-    passes, tests, _ = evaluate(ref, impl, examples)
-
-    print(f"{impl_name}: ({passes}/{tests}) {'OK' if passes == tests else 'NOT OK'}")
-    return passes == tests
+class InvalidImplementationError(Exception):
+    pass
 
 
-#def test_reference(ref_dir: os.DirEntry, impl_dir: Generator[os.DirEntry, None, None], num_examples: int) -> bool:
-def test_reference(ref_dir: os.DirEntry, ref: FunctionReference, num_examples: int,
-             impls: Generator[tuple[os.DirEntry, Function], None, None]) -> bool:
-    try:
-        example_gen = create(ref_dir.path)
-        example_file = os.path.join(ref_dir.path, "examples")
-        generate(ref, example_gen, num_examples, example_file)
-    except Exception:
-        raise Exception(f"could not create reference: {ref_dir.name}")
-
-    print(f"testing {ref_dir.name}:")
-    impl_passes = 0
-    impl_tests = 0
-    status = "NOT OK"
-    for impl_file, impl in impls:
-        passed = test_hypothesis(ref, impl, impl_file.name, example_file)
-
-        impl_tests += 1
-        if passed:
-            impl_passes += 1
-            status = "OK"
-
-    if impl_tests == 0:
-        raise Exception("no tests run")
-
-    print(f"{ref_dir.name}: ({impl_passes}/{impl_tests}) {status}")
-    return impl_passes > 0
+ReferenceFile = tuple[FunctionReference, os.DirEntry]
+ImplementationFile = tuple[Function, os.DirEntry]
 
 
 def setup_impl(impl: os.DirEntry):
@@ -49,7 +23,7 @@ def setup_impl(impl: os.DirEntry):
         contents = orig.read()
 
     if (m := re.match(r"\s*(\w+):", contents)) is None:
-        raise Exception("could not find a function label")
+        raise InvalidImplementationError("could not find a function label")
 
     func = m[1]
     assert impl.name.startswith(func)
@@ -61,74 +35,138 @@ def setup_impl(impl: os.DirEntry):
         backup.write(contents)
 
 
-def fetch_impls(ref: os.DirEntry, impls: str):
-    impl_dir = os.path.join(impls, ref.name)
-
+def implementations(basedir: str, impl: str, exts: set[str]) -> list[os.DirEntry]:
+    d = os.path.join(basedir, impl)
     try:
-        impl_file: os.DirEntry
-        for impl_file in os.scandir(impl_dir):
-            setup_impl(impl_file)
-            yield impl_file
-    except Exception:
-        raise Exception(f"could not get implementations for {ref.name}")
+        f: os.DirEntry
+        return [f for f in os.scandir(d) if os.path.splitext(f.name)[1] in exts]
+    except FileNotFoundError:
+        return []
+    except NotADirectoryError:
+        return []
 
 
-def fetch(refs: str, impls: str):
-    ref_dir: os.DirEntry
-    for ref_dir in os.scandir(refs):
-        yield ref_dir, fetch_impls(ref_dir, impls)
+def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
+    tuple[os.DirEntry, list[os.DirEntry]], None, None]:
+    ref: os.DirEntry
+    for ref in os.scandir(refdir):
+        props, ref_c = os.path.join(ref.path, "props"), os.path.join(ref.path, "ref.c")
 
-
-def test(refs_dir: str, impl_dir: str, num_examples: int):
-    for ref_dir, ref in references(refs_dir):
-        try:
-            test_reference(ref_dir, ref, num_examples, implementations(ref_dir, impl_dir))
-        except Exception:
+        if not (os.path.isfile(props) and os.path.isfile(ref_c)):
             continue
 
-def implementations(ref: os.DirEntry, impl_dir: str) -> Generator[tuple[os.DirEntry, Function], None, None]:
-    if not os.path.isdir(impl_dir):
-        return
-
-    impl_file: os.DirEntry
-    for impl_file in os.scandir(impl_dir):
-        base: str
-        ext: str
-        base, ext = os.path.splitext(impl_file.name)
-
-        if ext not in {".s", ".S"}:
+        if "div" in ref.name:
             continue
 
-        if not base.startswith(ref.name):
+        if not (impls := implementations(impldir, ref.name, impl_exts)):
             continue
 
-        lib_path = impl_file.path[:-1] + "so"
-        try:
-            impl = create(ref.path, impl_file.path, lib_path)
-        except Exception:
-            try:
-                setup_impl(impl_file)
-                impl = create(ref.path, impl_file.path, lib_path)
-            except Exception:
-                continue
+        yield ref, impls
 
-        yield impl_file, impl
 
-def references(refs_dir: str) -> Generator[tuple[os.DirEntry, FunctionReference], None, None]:
-    if not os.path.isdir(refs_dir):
-        return
+def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry) -> Function:
+    try:
+        return create_from(reference, path_to_implementation.path)
+    except CompilationError:
+        setup_impl(path_to_implementation)
+        return create_from(reference, path_to_implementation.path)
 
-    ref_dir: os.DirEntry
-    for ref_dir in os.scandir(refs_dir):
-        if not os.path.isdir(ref_dir):
-            continue
 
+def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> Generator[
+    tuple[ReferenceFile, list[ExampleInstance], list[ImplementationFile]], None, None]:
+    for ref_dir, impl_files in references(refdir, impldir, impl_exts):
+        print(f"working on {ref_dir.name}")
         try:
             ref = load_reference(ref_dir.path)
-        except Exception:
+            ref_impl = create_from(ref, os.path.join(ref_dir.path, "ref.c"))
+
+            example_file = os.path.join(ref_dir.path, "examples")
+            examples = generate(ref, ref_impl, num_examples, example_file)
+
+            impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
+
+            if impls:
+                yield (ref, ref_dir), examples, impls
+        except ParseError:
+            continue
+        except CompilationError:
+            continue
+        except UnsupportedTypeError:
             continue
 
-        yield ref_dir, ref
+
+class ReferenceResult:
+    def __init__(self, name: str, results: list[Result]):
+        self.name = name
+        self.results = results
+
+    def passed(self) -> bool:
+        return any(result.passed() for result in self.results)
+
+    def is_trivial(self) -> bool:
+        return all(result.is_trivial() for result in self.results)
+
+    def __str__(self):
+        status = "OK" if self.passed() else "NOT OK"
+        passes = sum(1 for result in self.results if result.passed())
+
+        return f"{self.name}: passed {passes}/{len(self.results)} tests ({status})"
+
+    def full(self):
+        results = "\n".join(" -> " + str(result) for result in self.results)
+        return self.name + "\n" + results + "\n" + str(self)
+
+    @staticmethod
+    def partition(results: list) -> dict:
+        partitions = {"pass": [], "fail": [], "trivial": []}
+
+        for result in results:
+            part = "fail" if not result.passed() else "trivial" if result.is_trivial() else "pass"
+            partitions[part].append(result)
+
+        return partitions
+
+    @staticmethod
+    def gen_report(results: list, verbose: bool, partitioned: bool = True) -> str:
+        def stringify_many(items: Iterable) -> str:
+            return "\n".join(item.full() if verbose else str(item) for item in items)
+
+        if partitioned:
+            partition = ReferenceResult.partition(results)
+
+            return "*** PASSES ***\n\n" + stringify_many(partition["pass"]) \
+                   + "\n\n*** FAILS ***\n\n" + stringify_many(partition["fail"]) \
+                   + "\n\n*** TRIVIAL ***\n\n" + stringify_many(partition["trivial"])
+        else:
+            return stringify_many(results)
+
+    @staticmethod
+    def summary(results: list) -> str:
+        passes = sum(1 for result in results if result.passed())
+
+        return f"{passes}/{len(results)} successful implementations"
+
+
+def test_implementation(ref: FunctionReference, implementation: ImplementationFile,
+                        examples: list[ExampleInstance]) -> Result:
+    impl, impl_file = implementation
+
+    evaluator = Evaluator(ref, impl)
+    result = evaluator.check(examples)
+    result.name = impl_file.name
+
+    return result
+
+
+def test_reference(reference: ReferenceFile, impls: list[ImplementationFile],
+                   examples: list[ExampleInstance]) -> ReferenceResult:
+    ref, ref_dir = reference
+    return ReferenceResult(ref_dir.name, [test_implementation(ref, impl, examples) for impl in impls])
+
+
+def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[ReferenceResult]:
+    return [test_reference(reference, impls, examples)
+            for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts)]
 
 
 if __name__ == '__main__':
@@ -140,24 +178,5 @@ if __name__ == '__main__':
 
     args = argparser.parse_args()
 
-    sucesses = 0
-    tests = 0
-    # this is crazy slow
-    # i think because it does all the work until it fails
-    # e.g. to fail when there is no implementation it first needs to parse a reference
-    # could make checking/failing out happen earlier
-    # otherwise just leave it :)
-    for ref_dir, ref in references(args.references):
-        if "div" in ref_dir.name:
-            continue
-
-        impl_dir = os.path.join(args.implementations, ref_dir.name)
-        try:
-            if test_reference(ref_dir, ref, 50, implementations(ref_dir, impl_dir)):
-                sucesses += 1
-
-            tests += 1
-        except Exception:
-            continue
-
-    print(f"passed ({sucesses}/{tests})")
+    results = test(args.references, args.implementations, 50, impl_exts={".c"})
+    print(ReferenceResult.gen_report(results, True, partitioned=True))
