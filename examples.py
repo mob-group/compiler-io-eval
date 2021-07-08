@@ -225,6 +225,7 @@ def parse_examples(inputs: ParserMapping, value: Parser, outputs: ParserMapping,
 
     return vals
 
+
 # Parsers for supported types
 def parse_int(s: str) -> (int, str):
     if (m := match(r"\s*(-?\d+)", s)) is not None:

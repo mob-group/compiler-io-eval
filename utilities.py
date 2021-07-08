@@ -1,12 +1,12 @@
-import uuid
-from typing import Tuple
-import subprocess
-import os
-import numpy as np
-import random
 import logging
+import os
+import random
+import subprocess
 import time
-from typing import Callable, Any, Optional
+import uuid
+from typing import Callable, Any, Optional, Tuple
+
+import numpy as np
 
 
 def get_tmp_file(content: str, extension: str = '') -> str:
@@ -39,6 +39,7 @@ def timeit(func: Callable) -> Any:
         t0 = time.time()
         res = func(*args, **kwargs)
         t1 = time.time()
-        logging.info(f'Run {func_name} in {t1-t0}s')
+        logging.info(f'Run {func_name} in {t1 - t0}s')
         return res
+
     return wrapped

@@ -1,10 +1,10 @@
-import re
-from typing import *
 import os.path
-from sys import stderr
-from json import dumps
-from enum import Enum
+import re
 from dataclasses import dataclass, asdict
+from enum import Enum
+from json import dumps
+from sys import stderr
+from typing import *
 
 
 class ParseIssue(Enum):
@@ -326,7 +326,7 @@ class FunctionReference:
         return params
 
     def outputs(self):
-        return [ parameter for parameter in self.parameters() if self.info.is_output(parameter) ]
+        return [parameter for parameter in self.parameters() if self.info.is_output(parameter)]
 
     @property
     def name(self):
@@ -480,6 +480,7 @@ def show_single(path_to_ref: str) -> None:
     print(dumps(asdict(contents), indent=4))
     contents.show_issues(verbose=True)
 
+
 def load_reference(path_to_reference: str, check_issues=True) -> FunctionReference:
     func = FunctionReference.parse(path_to_reference)
 
@@ -490,6 +491,7 @@ def load_reference(path_to_reference: str, check_issues=True) -> FunctionReferen
             raise ParseError("parse contained issues")
 
     return func
+
 
 if __name__ == "__main__":
     import argparse

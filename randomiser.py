@@ -1,6 +1,7 @@
 import random
 import string
 
+
 class Randomiser:
     def __init__(self, seed=None):
         random.seed(seed)
@@ -9,7 +10,7 @@ class Randomiser:
         return random.randint(min_val, max_val)
 
     def random_float(self, min_val=0, max_val=10):
-        return random.random() * (max_val-min_val) + min_val
+        return random.random() * (max_val - min_val) + min_val
 
     def random_double(self, min_val=0, max_val=10):
         return self.random_float(min_val=min_val, max_val=max_val)

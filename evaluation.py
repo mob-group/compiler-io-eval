@@ -19,6 +19,7 @@ class Generator:
     runs it on a "correct" version of the function,
     and then retrieves the output produced by that code.
     """
+
     def __init__(self, reference: FunctionReference, runner: Function):
         self.reference = reference
         self.runner = runner
@@ -149,6 +150,7 @@ class Evaluator:
     """
     Evaluates functions on examples
     """
+
     def __init__(self, reference: FunctionReference, runner: Function):
         self.reference = reference
         self.runner = runner

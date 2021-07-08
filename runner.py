@@ -2,6 +2,7 @@ import ctypes
 import os.path
 import sys
 from typing import *
+
 import reference_parser
 import utilities
 from reference_parser import FunctionReference, CType, UnsupportedTypeError
@@ -69,6 +70,7 @@ class Parameter:
     """
     A wrapper for a parameter to a function
     """
+
     def __init__(self, name: str, c_type: CType, is_output: bool):
         self.name = name
         self.is_output = is_output
@@ -142,6 +144,7 @@ class Function:
     """
     An executable version of a C function
     """
+
     def __init__(self, reference: FunctionReference, lib_path: str):
         if not (lib_path.startswith("./") or lib_path.startswith("/")):
             lib_path = f"./{lib_path}"
@@ -220,7 +223,7 @@ def compile_lib(path_to_compilable: str, lib_path: str):
     :param lib_path: the .so file to compile into
     """
     stdout, stderr = utilities.run_command(
-        f"gcc -Wall -O0 -shared -fPIC -Wl,-soname,{lib_path} -o {lib_path} {path_to_compilable}")
+        f"gcc -Wall -O0 -shared -fPIC -Wl,-install_name,{lib_path} -o {lib_path} {path_to_compilable}")
 
     if stderr:
         print(stderr, file=sys.stderr)
