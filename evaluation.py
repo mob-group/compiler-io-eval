@@ -1,10 +1,13 @@
 import sys
 
 import utilities
+from textwrap import indent, dedent
 from examples import ExampleInstance, ParameterMapping, parse, form
 from randomiser import Randomiser
 from reference_parser import FunctionReference, CParameter, load_reference, UnsupportedTypeError
+import lumberjack
 from runner import Function, SomeValue, create, FunctionRunError
+from typing import Optional, Any
 
 
 class UnsatisfiedDependencyError(Exception):
@@ -39,7 +42,7 @@ class Generator:
         try:
             return [self.generate_single() for _ in range(n)]
         except FunctionRunError as e:
-            print(e.args[0], file=sys.stdout)
+            lumberjack.getLogger("error").error(f"issue calling function {self.reference.name}")
             return []
 
     def generate_single(self) -> ExampleInstance:
@@ -116,9 +119,18 @@ class Generator:
             output = form(self.reference, examples)
             f.writelines(f"{line}\n" for line in output)
 
+class Failure:
+    def __init__(self, expected: ExampleInstance, value: Any, outputs: dict[str, Any]):
+        self.expected = expected
+        self.value = value
+        self.outputs = outputs
+
+    def __str__(self):
+        return f"input {self.expected.inputs} produced incorrect values (expected vs. real); {self.expected.value} vs. {self.value}; {self.expected.outputs} vs. {self.outputs}"
+
 
 class Result:
-    def __init__(self, passes: int, tests: int, failures: list[str], name: str = None):
+    def __init__(self, passes: int, tests: int, failures: list[Failure], name: str = None):
         assert passes >= 0 and tests >= 0  # len(failures) is implicitly >= 0
         assert passes + len(failures) == tests
 
@@ -133,12 +145,18 @@ class Result:
     def is_trivial(self) -> bool:
         return self.tests == 0
 
-    def show(self):
-        print(f"passed: {self.passes}/{self.tests}")
-        if self.failures:
-            print("failures:")
-            for fail in self.failures:
-                print(fail)
+    def full(self, show_fails: bool) -> str:
+        if show_fails and self.failures:
+            return dedent('''\
+            {summ}
+
+            {failures}\
+            ''').format(summ=self, failures=self.show_failures())
+        else:
+            return str(self)
+
+    def show_failures(self) -> str:
+        return indent("\n".join(str(failure) for failure in self.failures), " >> ")
 
     def __str__(self):
         status = "OK" if self.passed else "NOT OK"
@@ -184,7 +202,7 @@ class Evaluator:
         """
         return examples
 
-    def check_example(self, example: ExampleInstance) -> bool:
+    def check_example(self, example: ExampleInstance) -> Optional[Failure]:
         """
         Runs an example and checks whether the result matches the expected
 
@@ -192,18 +210,19 @@ class Evaluator:
         :return: whether or not the output of the example matches the expected output
         """
         val = self.runner.run(**example.inputs)
-
-        if val != example.value:
-            return False
-
         expected = example.outputs
         actual = self.runner.outputs()
 
+        fail = Failure(example, val, actual)
+
+        if val != example.value or (val is float("nan") and example.value is float("nan")):
+            return fail
+
         for param in expected:
             if expected[param] != actual[param]:
-                return False
+                return fail
 
-        return True
+        return None
 
     def check(self, examples: list[ExampleInstance]) -> Result:
         """
@@ -217,11 +236,11 @@ class Evaluator:
         failures = []
 
         for example in examples:
-            res = self.check_example(example)
-            if res:
+            failure = self.check_example(example)
+            if failure is None:
                 passes += 1
             else:
-                failures.append(str(example))
+                failures.append(failure)
 
         return Result(passes, len(examples), failures)
 
@@ -237,7 +256,11 @@ def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
     """
     e = Evaluator(ref, run)
     examples = e.read(ex_file)
-    return e.check(examples)
+    result = e.check(examples)
+
+    lumberjack.getLogger("failure").error(result.show_failures())
+
+    return result
 
 
 def generate(ref: FunctionReference, run: Function, n: int, ex_file: str = None) -> list[ExampleInstance]:

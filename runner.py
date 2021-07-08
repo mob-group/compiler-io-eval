@@ -1,4 +1,5 @@
 import ctypes
+import lumberjack
 import os.path
 import math
 import sys
@@ -254,7 +255,7 @@ def compile_lib(path_to_compilable: str, lib_path: str):
         f"gcc -Wall -O0 -shared -fPIC -Wl,-install_name,{lib_path} -o {lib_path} {path_to_compilable}")
 
     if stderr:
-        print(stderr, file=sys.stderr)
+        lumberjack.getLogger("error").error(stderr)
         raise CompilationError(path_to_compilable, lib_path)
 
 

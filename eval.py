@@ -1,7 +1,10 @@
+import lumberjack
 import os
 import re
 from typing import *
+from textwrap import indent, dedent
 
+from datetime import datetime
 from evaluation import generate, Evaluator, Result
 from examples import ExampleInstance
 from reference_parser import load_reference, FunctionReference, ParseError, UnsupportedTypeError
@@ -112,9 +115,14 @@ class ReferenceResult:
 
         return f"{self.name}: passed {passes}/{len(self.results)} tests ({status})"
 
-    def full(self):
-        results = "\n".join(" -> " + str(result) for result in self.results)
-        return self.name + "\n" + results + "\n" + str(self)
+    def full(self, show_failures: bool):
+        return dedent('''\
+        {name}
+        {results}
+        {summ}\
+        ''').format(name=self.name,
+                    results="\n".join(indent(result.full(show_failures), "  ") for result in self.results),
+                    summ=self)
 
     @staticmethod
     def partition(results: list) -> dict:
@@ -127,18 +135,45 @@ class ReferenceResult:
         return partitions
 
     @staticmethod
-    def gen_report(results: list, verbose: bool, partitioned: bool = True) -> str:
+    def gen_report(results: list, verbose: bool, show_failures: bool = True, partitioned: bool = True) -> str:
         def stringify_many(items: Iterable) -> str:
-            return "\n".join(item.full() if verbose else str(item) for item in items)
+            assert verbose != False and show_failures == True #just a meaningless use case
+
+            return "\n".join(item.full(show_failures) if verbose else str(item) for item in items)
 
         if partitioned:
             partition = ReferenceResult.partition(results)
+            passes = partition["pass"]
+            fails = partition["fail"]
+            trivials = partition["trivial"]
 
-            return "*** PASSES ***\n\n" + stringify_many(partition["pass"]) \
-                   + "\n\n*** FAILS ***\n\n" + stringify_many(partition["fail"]) \
-                   + "\n\n*** TRIVIAL ***\n\n" + stringify_many(partition["trivial"])
+            res = dedent('''\
+            *** PASSES {n_pass}/{tests} ***
+
+            {passes}
+
+            *** FAILS {n_fail}/{tests} ***
+
+            {fails}
+
+            *** TRIVIAL {n_trivial}/{tests} ***
+
+            {trivials}\
+            ''').format(passes=stringify_many(passes),
+                        fails=stringify_many(fails),
+                        trivials=stringify_many(trivials),
+                        n_pass=len(passes),
+                        n_fail=len(fails),
+                        n_trivial=len(trivials),
+                        tests=len(results))
         else:
-            return stringify_many(results)
+            res = stringify_many(results)
+
+        return dedent('''\
+        {res}
+        
+        {summ}\
+        ''').format(res=res, summ=ReferenceResult.summary(results))
 
     @staticmethod
     def summary(results: list) -> str:
@@ -165,6 +200,9 @@ def test_reference(reference: ReferenceFile, impls: list[ImplementationFile],
 
 
 def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[ReferenceResult]:
+    now = datetime.now()
+
+    lumberjack.getLogger("general").info(f"testing beginning: {now.strftime('%d/%m/%Y %H:%M:%S')}")
     return [test_reference(reference, impls, examples)
             for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts)]
 

@@ -1,3 +1,4 @@
+import lumberjack
 import os.path
 import re
 from dataclasses import dataclass, asdict
@@ -351,7 +352,7 @@ class FunctionReference:
 
         return FunctionReference(props.sig, props.arr_info, ref)
 
-    def validate(self) -> Set[ParseIssue]:
+    def issues(self) -> Set[ParseIssue]:
         """
         Check this FunctionReference for any issues.
 
@@ -412,15 +413,20 @@ class FunctionReference:
 
         return issues
 
-    def show_issues(self, verbose: bool = False, ignore_good: bool = False) -> None:
+    def validate(self, issues, ignorable: set[issues] = None):
+        if ignorable is None:
+            ignorable = ParseIssue.ignorable()
+
+        if issues - ignorable:
+            raise ParseError(f"parse of {self.name} contained issues")
+
+    def show_issues(self, issues: set[ParseIssue], verbose: bool = False, ignore_good: bool = False) -> None:
         """
         Write any issues in the function to stderr
 
         :param verbose: set to :code:`True` to include a full breakdown of any issues found
         :param ignore_good: set to :code:`True` to write to stderr even if no issues are found
         """
-        issues = self.validate()
-
         if issues:
             print(f"error: {self.name} is broken!", file=stderr)
             for issue in issues:
@@ -430,6 +436,16 @@ class FunctionReference:
                 print(dumps(asdict(self), indent=4) + "\n", file=stderr)
         elif not ignore_good:
             print(f"{self.name} is good", file=stderr)
+
+    def log_issues(self, issues: set[ParseIssue]) -> None:
+        if not issues:
+            return
+
+        logger = lumberjack.getLogger("error")
+        msg = f"{self.name} has issues: [{', '.join(issue.name for issue in issues)}]"
+
+        logger.warn(msg)
+
 
 
 def show_all(base_path: str) -> None:
@@ -477,18 +493,18 @@ def show_single(path_to_ref: str) -> None:
     :param prog_name: the name of the function directory
     """
     contents = FunctionReference.parse(path_to_ref)
+    issues = contents.issues()
+
     print(dumps(asdict(contents), indent=4))
-    contents.show_issues(verbose=True)
+    contents.show_issues(issues, verbose=True)
 
 
-def load_reference(path_to_reference: str, check_issues=True) -> FunctionReference:
+def load_reference(path_to_reference: str, log_issues: Callable = FunctionReference.log_issues) -> FunctionReference:
     func = FunctionReference.parse(path_to_reference)
+    issues = func.issues()
 
-    if check_issues:
-        issues = func.validate()
-        if issues - ParseIssue.ignorable():
-            func.show_issues()
-            raise ParseError("parse contained issues")
+    log_issues(func, issues)
+    func.validate(issues)
 
     return func
 
