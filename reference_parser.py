@@ -31,6 +31,18 @@ class ParseIssue(Enum):
         }
 
 
+class ParseError(Exception):
+    pass
+
+
+class UnsupportedTypeError(Exception):
+    def __init__(self, unsupported):
+        self.unsupported = unsupported
+
+    def __str__(self):
+        return f"attempted to use unsupported type: {self.unsupported}"
+
+
 @dataclass
 class CType:
     """
@@ -64,7 +76,7 @@ class CType:
             pointer_level = 0
 
         if pointer_level > 1:
-            raise Exception("multi-level pointers are not supported")
+            raise UnsupportedTypeError("multi-level pointers")
 
         return CType(contents, pointer_level)
 
@@ -92,7 +104,7 @@ class CParameter:
         """
         m = re.match("((?:int|char|float|double|bool|void)[* ]+)(.*)", param)
         if m is None:
-            raise Exception("invalid parameter")
+            raise ParseError("invalid parameter")
 
         c_type, name = m.groups()
 
@@ -126,9 +138,9 @@ class FunctionSignature:
         :param sig: the signature
         :return: the instance built from that signature
         """
-        m = re.match("(.*)\((.*)\)", sig)
+        m = re.match(r"(.*)\((.*)\)", sig)
         if m is None:
-            raise Exception("broken...")
+            raise ParseError("could not parse function signature")
 
         func_def = CParameter.parse(m[1].strip())
         params = [param.strip() for param in m[2].split(",")]
@@ -208,7 +220,7 @@ class FunctionArrayInfo:
                 size = ParamSize.parse(line.removeprefix("size").strip())
                 sizes.append(size)
             else:
-                raise Exception("very bad")
+                raise ParseError("invalid directive in props")
 
         return FunctionArrayInfo(outputs, sizes)
 
@@ -368,7 +380,7 @@ class FunctionReference:
 
             # this is a SUPER simplified version of checking for valid C identifiers
             # doesn't take keywords etc. into consideration
-            m = re.match("^[a-zA-Z_]\w*$", name, flags=re.ASCII)
+            m = re.match(r"^[a-zA-Z_]\w*$", name, flags=re.ASCII)
             if not m or m[0] != name:
                 issues.add(ParseIssue.InvalidIdentifierName)
 
@@ -475,7 +487,7 @@ def load_reference(path_to_reference: str, check_issues=True) -> FunctionReferen
         issues = func.validate()
         if issues - ParseIssue.ignorable():
             func.show_issues()
-            raise Exception("parse contained issues")
+            raise ParseError("parse contained issues")
 
     return func
 

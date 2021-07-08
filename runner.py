@@ -4,7 +4,7 @@ import sys
 from typing import *
 import reference_parser
 import utilities
-from reference_parser import FunctionReference, CType
+from reference_parser import FunctionReference, CType, UnsupportedTypeError
 
 ScalarValue = Union[int, float, bool, str]
 ArrayValue = Union[str, list[ScalarValue]]
@@ -12,6 +12,10 @@ SomeValue = Union[ScalarValue, ArrayValue]
 AnyValue = Union[SomeValue, None]
 
 ScalarCType = Union[ctypes.c_int, ctypes.c_float, ctypes.c_double, ctypes.c_char, ctypes.c_double]
+
+
+class FunctionRunError(Exception):
+    pass
 
 
 class CArray:
@@ -42,7 +46,7 @@ class CArray:
             s = obj.encode("ASCII")
 
             if cls.output:
-                raise Exception("output strings are not supported")
+                raise UnsupportedTypeError("output strings")
                 # return ctypes.create_string_buffer(s)
             else:
                 return ctypes.c_char_p(s)
@@ -55,6 +59,10 @@ class CArray:
             cls.parameter.set_value(val)
 
         return val
+
+
+class InvalidTypeError(Exception):
+    pass
 
 
 class Parameter:
@@ -77,7 +85,7 @@ class Parameter:
                                 "parameter": self,
                                 })
         else:
-            raise Exception("multi-level pointers are not supported")
+            raise UnsupportedTypeError("multi-level pointers")
 
     @property
     def value(self) -> SomeValue:
@@ -93,7 +101,7 @@ class Parameter:
         try:
             # value is a string
             return self.output_val.value.decode()
-        except Exception:
+        except AttributeError:
             # value is a normal array
             return self.output_val[:]
 
@@ -125,9 +133,9 @@ class Parameter:
         elif c_type_name == "bool":
             return ctypes.c_bool
         elif c_type_name == "void":
-            raise Exception("check void types separately, there isn't a ctypes representation")
+            raise InvalidTypeError("check void types separately, there isn't a ctypes representation")
         else:
-            raise Exception(f"type {c_type_name} is not supported")
+            raise UnsupportedTypeError(c_type_name)
 
 
 class Function:
@@ -157,7 +165,10 @@ class Function:
         """
         args = [params[param.name] for param in self.parameters]
 
-        return self.exe(*args)
+        try:
+            return self.exe(*args)
+        except ctypes.ArgumentError:
+            raise FunctionRunError("could not build function types")
 
     def outputs(self):
         """
@@ -183,9 +194,18 @@ class Function:
             exe.restype = Parameter.get_scalar_type(ret_type.contents)
         elif ret_type.pointer_level == 1:
             exe.restype = ctypes.POINTER(Parameter.get_scalar_type(ret_type.contents))
-            raise Exception("return pointers are not supported")
+            raise UnsupportedTypeError("return pointers")
         else:
-            raise Exception("multi-level return pointers are not supported")
+            raise UnsupportedTypeError("multi-level return pointers")
+
+
+class CompilationError(Exception):
+    def __init__(self, compilable: str, library: str):
+        self.compilable = compilable
+        self.library = compilable
+
+    def __str__(self):
+        return f"issue compiling {self.compilable} into {self.library}"
 
 
 def compile_lib(path_to_compilable: str, lib_path: str):
@@ -204,7 +224,7 @@ def compile_lib(path_to_compilable: str, lib_path: str):
 
     if stderr:
         print(stderr, file=sys.stderr)
-        raise Exception("issues with compilation")
+        raise CompilationError(path_to_compilable, lib_path)
 
 
 def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str = None) -> Function:
@@ -221,11 +241,15 @@ def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str
         ref_file = "ref.c"
         path_to_compilable = os.path.join(path_to_reference, ref_file)
 
+    ref = reference_parser.load_reference(path_to_reference)
+
+    return create_from(ref, path_to_compilable, lib_path)
+
+
+def create_from(reference: FunctionReference, path_to_compilable: str, lib_path: str = None) -> Function:
     if lib_path is None:
         lib_path = f"{utilities.get_tmp_path()}.so"
 
     compile_lib(path_to_compilable, lib_path)
 
-    ref = reference_parser.load_reference(path_to_reference)
-
-    return Function(ref, lib_path)
+    return Function(reference, lib_path)

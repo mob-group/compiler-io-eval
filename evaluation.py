@@ -1,8 +1,14 @@
+import sys
+
 import utilities
-from reference_parser import FunctionReference, CParameter, load_reference
-from randomiser import Randomiser
-from runner import Function, SomeValue, create
 from examples import ExampleInstance, ParameterMapping, parse, form
+from randomiser import Randomiser
+from reference_parser import FunctionReference, CParameter, load_reference, UnsupportedTypeError
+from runner import Function, SomeValue, create, FunctionRunError
+
+
+class UnsatisfiedDependencyError(Exception):
+    pass
 
 
 class Generator:
@@ -29,7 +35,11 @@ class Generator:
         """
         assert n > 0
 
-        return [self.generate_single() for _ in range(n)]
+        try:
+            return [self.generate_single() for _ in range(n)]
+        except FunctionRunError as e:
+            print(e.args[0], file=sys.stdout)
+            return []
 
     def generate_single(self) -> ExampleInstance:
         """
@@ -74,7 +84,7 @@ class Generator:
         elif scalar_type == "bool":
             gen = lambda: self.randomiser.random_bool()
         else:
-            raise Exception(f"can't produce value of type {scalar_type}")
+            raise UnsupportedTypeError(scalar_type)
 
         if parameter.type.pointer_level == 0:
             val = gen()
@@ -85,7 +95,7 @@ class Generator:
             size = self.reference.info.size(parameter)
 
             if size not in current:
-                raise Exception(f"could not find size ({size}) for parameter ({parameter.name})")
+                raise UnsatisfiedDependencyError(f"could not find size ({size}) for parameter ({parameter.name})")
             else:
                 size = current[size]
 
@@ -265,7 +275,7 @@ if __name__ == '__main__':
             for fail in failures:
                 print(fail)
     except AttributeError:
-        # its a gen instead
+        # it's a gen instead
         run = create(args.ref)
         assert args.num_examples > 0
         generate(ref, run, args.num_examples, args.examples)

@@ -1,8 +1,9 @@
 from dataclasses import dataclass
-from typing import *
 from re import match
+from typing import *
+
+from reference_parser import CType, CParameter, FunctionReference, UnsupportedTypeError
 from runner import SomeValue, AnyValue
-from reference_parser import CType, CParameter, FunctionReference
 
 Name = NewType("Name", str)
 Parser = NewType("Parser", Callable)
@@ -322,4 +323,4 @@ def parser_for(c_type: CType) -> Parser:
     elif c_type.contents == "bool":
         return parse_bool
     else:
-        raise Exception(f"no parser exists for type: {c_type}")
+        raise UnsupportedTypeError(c_type)
