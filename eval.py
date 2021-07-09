@@ -52,7 +52,7 @@ def implementations(basedir: str, impl: str, exts: set[str]) -> list[os.DirEntry
 def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
     tuple[os.DirEntry, list[os.DirEntry]], None, None]:
     ref: os.DirEntry
-    for ref in os.scandir(refdir):
+    for ref in sorted(os.scandir(refdir), key=lambda x: (x.is_dir(), x.name)):
         props, ref_c = os.path.join(ref.path, "props"), os.path.join(ref.path, "ref.c")
 
         if not (os.path.isfile(props) and os.path.isfile(ref_c)):

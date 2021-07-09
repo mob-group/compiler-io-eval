@@ -280,7 +280,9 @@ def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str
 
 def create_from(reference: FunctionReference, path_to_compilable: str, lib_path: str = None) -> Function:
     if lib_path is None:
-        lib_path = f"{utilities.get_tmp_path()}.so"
+        if not os.path.exists("_tmp"):
+            os.makedirs("_tmp")
+        lib_path = os.path.join("_tmp", f"{utilities.get_tmp_path()}.so")
 
     compile_lib(path_to_compilable, lib_path)
 
