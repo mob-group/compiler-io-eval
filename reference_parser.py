@@ -168,10 +168,13 @@ class FunctionSignature:
 @dataclass
 class ParamSize:
     """
-    Denotes an association between a array parameter, and a scalar parameter containing the array's size
+    Denotes an association between a array parameter, and a scalar parameter containing the array's size.
+    Additionally, for instance in strings, it can contain the way to derive the size of the array from
+    multiple parameters.
     """
     array: str
-    var: str
+    size: str
+    max: Optional[int] = None
 
     @staticmethod
     def parse(size: str):
@@ -180,16 +183,54 @@ class ParamSize:
 
         These strings are in the form given in *props* files, e.g.
 
-        "size arr_name scalar_name"
+        "size arr_name, scalar_name"
+
+        Also supports complex size format, e.g.
+
+        "size arr_name, max, { expr }"
+
+        Here *expr* is a Python expressions that can be evaluated,
+        and *max* is the maximum length of the **initial** value.
+
+        The value of the expression (val) is always used to specify the
+        size of the C array, even if val > max.
+        This is because max only caps the size of the initial value of
+        the array **in Python**, it is never passed through to C.
 
         :param size: the description
         :return: the ParamSize instance
         """
-        parts = size.removeprefix("size").strip().split(",")
+        size = size.removeprefix("size").strip()
 
-        assert (len(parts) == 2)
+        split = size.index(",")
 
-        return ParamSize(parts[0].strip(), parts[1].strip())
+        arr_name = size[:split].strip()
+        assert arr_name
+
+        size = size[split + 1:].strip()
+
+        if "," not in size:
+            # simple format
+            return ParamSize(arr_name, size)
+        else:
+            # in complex format
+
+            # split again to find max and size
+            split = size.index(",")
+
+            arr_max = int(size[:split].strip())
+            arr_size = size[split + 1:].strip()
+
+            # check fields are valid
+            if not (arr_size.startswith("{") and arr_size.endswith("}")):
+                raise ParseError("invalid complex size expression given")
+
+            # remove braces from expr and check it is still non-empty
+            arr_size = arr_size[1:-1].strip()
+            if not arr_size:
+                raise ParseError("empty expression given in complex size")
+
+            return ParamSize(arr_name, arr_size, max=arr_max)
 
 
 @dataclass
@@ -203,7 +244,7 @@ class FunctionArrayInfo:
     sizes: List[ParamSize]
 
     @staticmethod
-    def parse(info: List[str]):
+    def parse(outputs: list[str], sizes: list[str]):
         """
         Build a FunctionArrayInfo instance from a list of description strings.
         These strings may be describing either sizes or outputs.
@@ -212,25 +253,28 @@ class FunctionArrayInfo:
         :param info: the description strings
         :return: the instance containing the information
         """
-        outputs = []
-        sizes = []
-
-        for line in info:
-            if line.startswith("output"):
-                outputs.append(line.removeprefix("output").strip())
-            elif line.startswith("size"):
-                size = ParamSize.parse(line.removeprefix("size").strip())
-                sizes.append(size)
-            else:
-                raise ParseError("invalid directive in props")
-
-        return FunctionArrayInfo(outputs, sizes)
+        return FunctionArrayInfo(outputs, [ParamSize.parse(size) for size in sizes])
 
     def is_output(self, param: CParameter) -> bool:
         return param.name in self.outputs
 
     def size(self, param: CParameter) -> str:
-        return {size.array: size.var for size in self.sizes}.get(param.name)
+        return {size.array: size.size for size in self.sizes}.get(param.name)
+
+
+@dataclass
+class FunctionConstraints:
+    constraints: list[str]
+
+    def satisfied(self, **kwargs):
+        return all(eval(constraint) for constraint in self.constraints)
+
+    @staticmethod
+    def parse(constraints: list[str]):
+        def parse_single(constraint: str):
+            return constraint.strip().removeprefix("{").removesuffix("}")
+
+        return FunctionConstraints([parse_single(constraint) for constraint in constraints])
 
 
 @dataclass
@@ -242,6 +286,7 @@ class FunctionProps:
     """
     sig: FunctionSignature
     arr_info: FunctionArrayInfo
+    constraints: FunctionConstraints
 
     @staticmethod
     def parse(props_file: str):
@@ -253,9 +298,23 @@ class FunctionProps:
         """
         with open(props_file, "r") as props:
             sig = FunctionSignature.parse(props.readline())
-            rest = FunctionArrayInfo.parse(props.readlines())
+            rest = props.readlines()
 
-        return FunctionProps(sig, rest)
+        outputs = []
+        sizes = []
+        constraints = []
+
+        for line in rest:
+            if line.startswith("output"):
+                outputs.append(line.removeprefix("output").strip())
+            elif line.startswith("size"):
+                sizes.append(line.removeprefix("size").strip())
+            elif line.startswith("constrain"):
+                constraints.append(line.removeprefix("constrain").strip())
+            else:
+                raise ParseError("invalid directive in props")
+
+        return FunctionProps(sig, FunctionArrayInfo.parse(outputs, sizes), FunctionConstraints.parse(constraints))
 
 
 @dataclass
@@ -304,6 +363,7 @@ class FunctionReference:
     """
     signature: FunctionSignature
     info: FunctionArrayInfo
+    constraints: FunctionConstraints
     reference: CReference
 
     @property
@@ -351,7 +411,7 @@ class FunctionReference:
         props = FunctionProps.parse(os.path.join(path, "props"))
         ref = CReference.parse(os.path.join(path, "ref.c"))
 
-        return FunctionReference(props.sig, props.arr_info, ref)
+        return FunctionReference(props.sig, props.arr_info, props.constraints, ref)
 
     def issues(self) -> Set[ParseIssue]:
         """
@@ -393,13 +453,13 @@ class FunctionReference:
         sized = set()
         for size in self.info.sizes:
             array = size.array
-            var = size.var
+            var = size.size
             sized.add(array)
 
             if array not in array_params:
                 issues.add(ParseIssue.ScalarGivenSize)
 
-            if param_dict[var].contents not in {"int"}:
+            if size.max is None and param_dict[var].contents not in {"int"}:
                 issues.add(ParseIssue.GivenInvalidSize)
 
         for array in array_params - sized:
