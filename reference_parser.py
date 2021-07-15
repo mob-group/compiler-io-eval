@@ -85,6 +85,9 @@ class CType:
     def __str__(self):
         return f"{self.contents}{'*' * self.pointer_level}"
 
+    def with_ptr_level(self, ptr_level: int):
+        return CType(self.contents, ptr_level)
+
 
 @dataclass
 class CParameter:
@@ -229,8 +232,8 @@ class FunctionArrayInfo:
     def is_output(self, param: CParameter) -> bool:
         return param.name in self.outputs
 
-    def size(self, param: CParameter) -> str:
-        return {size.array: size.var for size in self.sizes}.get(param.name)
+    def size(self, param: CParameter) -> Optional[ParamSize]:
+        return {size.array: size for size in self.sizes}.get(param.name)
 
 
 @dataclass
@@ -310,25 +313,12 @@ class FunctionReference:
     def type(self):
         return self.signature.type
 
-    def parameters(self, safe_order=False) -> List[CParameter]:
-        if not safe_order:
-            return self.signature.parameters
-
-        sized = []
-        params = []
-        for parameter in self.signature.parameters:
-            if self.info.size(parameter) is None:
-                params.append(parameter)
-            else:
-                sized.append(parameter)
-
-        for parameter in sized:
-            params.append(parameter)
-
-        return params
+    @property
+    def parameters(self):
+        return self.signature.parameters
 
     def outputs(self):
-        return [parameter for parameter in self.parameters() if self.info.is_output(parameter)]
+        return [parameter for parameter in self.parameters if self.info.is_output(parameter)]
 
     @property
     def name(self):
@@ -368,7 +358,7 @@ class FunctionReference:
         param_dict = dict()
         array_params = set()
         scalar_params = set()
-        for param in self.parameters():
+        for param in self.parameters:
             name = param.name
             c_type = param.type
 
@@ -445,7 +435,7 @@ class FunctionReference:
         logger = lumberjack.getLogger("error")
         msg = f"{self.name} has issues: [{', '.join(issue.name for issue in issues)}]"
 
-        logger.warn(msg)
+        logger.warning(msg)
 
 
 def show_all(base_path: str) -> None:
@@ -479,7 +469,7 @@ def show_all(base_path: str) -> None:
             continue
 
         parsed = FunctionReference.parse(dir_path)
-        parsed.show_issues(ignore_good=True)
+        parsed.show_issues(parsed.issues(), ignore_good=True)
         print(parsed.signature.c_sig())
 
 

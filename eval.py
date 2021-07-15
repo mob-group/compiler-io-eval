@@ -84,7 +84,7 @@ def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> 
             ref_impl = create_from(ref, os.path.join(ref_dir.path, "ref.c"))
 
             example_file = os.path.join(ref_dir.path, "examples")
-            examples = generate(ref, ref_impl, num_examples, example_file)
+            examples = generate(ref_impl, num_examples, ex_file=example_file)
 
             impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
 
@@ -186,7 +186,7 @@ def test_implementation(ref: FunctionReference, implementation: ImplementationFi
                         examples: list[ExampleInstance]) -> Result:
     impl, impl_file = implementation
 
-    evaluator = Evaluator(ref, impl)
+    evaluator = Evaluator(impl)
     result = evaluator.check(examples)
     result.name = impl_file.name
 
@@ -203,8 +203,15 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[Refere
     now = datetime.now()
 
     lumberjack.getLogger("general").info(f"testing beginning: {now.strftime('%d/%m/%Y %H:%M:%S')}")
-    return [test_reference(reference, impls, examples)
-            for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts)]
+
+    results = []
+    for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts):
+        try:
+            results.append(test_reference(reference, impls, examples))
+        except AssertionError:
+            continue
+
+    return results
 
 
 if __name__ == '__main__':

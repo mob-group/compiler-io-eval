@@ -1,12 +1,14 @@
 import ctypes
 import math
 import os.path
+from dataclasses import dataclass
+from enum import Enum
 from typing import *
 
 import lumberjack
 import reference_parser
 import utilities
-from reference_parser import FunctionReference, CType, UnsupportedTypeError
+from reference_parser import UnsupportedTypeError, FunctionReference
 
 ScalarValue = Union[int, float, bool, str]
 ArrayValue = Union[str, list[ScalarValue]]
@@ -20,153 +22,245 @@ class FunctionRunError(Exception):
     pass
 
 
-class CArray:
-    """
-    A general type to store ctypes arrays, c_char_p, and string buffers
-    """
-    parameter = None
-    scalar_type = None
-    output = None
+class Primitive(Enum):
+    Int = reference_parser.CType("int", 0)
+    Float = reference_parser.CType("float", 0)
+    Double = reference_parser.CType("double", 0)
+    Char = reference_parser.CType("char", 0)
+    Bool = reference_parser.CType("bool", 0)
 
-    @classmethod
-    def from_param(cls, obj: ArrayValue):
-        """
-        Implementing the ctypes method
+    @staticmethod
+    def get(c_type: str):
+        primitive: Primitive
+        for primitive in Primitive:
+            if c_type == primitive.value.contents:
+                return primitive
 
-        This method allows native Python arrays/strings to be converted into usable C ones
-        when a C function is called.
-        These types are registered in the functions :code:`argtypes` and the rest is handled automatically.
+        raise reference_parser.UnsupportedTypeError(c_type)
 
-        Since this is called automatically, and the C versions of objects are created here,
-        it is the only place where references to C objects can be stored.
-        They are only required for output parameters, so here they are registered to the parameter.
+    def native_type(self):
+        if self == Primitive.Int:
+            return int
+        elif self == Primitive.Float:
+            return float
+        elif self == Primitive.Double:
+            return float
+        elif self == Primitive.Char:
+            return str
+        elif self == Primitive.Bool:
+            return bool
 
-        :param obj: the native Python value to convert
-        :return: the C version of that value
-        """
-        if cls.scalar_type == ctypes.c_char:
-            s = obj.encode("ASCII")
+    def foreign_type(self):
+        if self == Primitive.Int:
+            return ctypes.c_int
+        elif self == Primitive.Float:
+            return ctypes.c_float
+        elif self == Primitive.Double:
+            return ctypes.c_double
+        elif self == Primitive.Char:
+            return ctypes.c_char
+        elif self == Primitive.Bool:
+            return ctypes.c_bool
 
-            if cls.output:
-                raise UnsupportedTypeError("output strings")
-                # return ctypes.create_string_buffer(s)
-            else:
-                return ctypes.c_char_p(s)
-
-        try:
-            arr_type = cls.scalar_type * len(obj)
-        except Exception as e:
-            arr_type = cls.scalar_type.floating_type * len(obj)
-
-        val = arr_type(*obj)
-
-        if cls.output:
-            # TODO: edit this to use proper setter function
-            cls.parameter.set_value(val)
-
-        return val
+    @property
+    def name(self) -> str:
+        return self.value.contents
 
 
-class Floating:
-    floating_type = None
+class TypeMismatchError(Exception):
+    pass
 
-    def __init__(self, value: Union[ctypes.c_float, ctypes.c_double]):
+
+class CScalar:
+    primitive: Primitive
+    value: Optional[SomeValue] = None
+
+    def __init__(self, primitive: Primitive, value: Optional[ScalarValue] = None):
+        self.primitive = primitive
+
+        if value is not None and not isinstance(value, primitive.native_type()):
+            raise TypeMismatchError(f"{value} is not a {primitive.name}")
+
         self.value = value
+
+    def foreign_value(self, **kwargs):
+        assert self.value is not None
+        return self.primitive.foreign_type()(self.value)
+
+    def values_match(self, o_type: Primitive, o_val) -> bool:
+        try:
+            # if o_val is a c_types value
+            o_val = o_val.value
+        except AttributeError:
+            # if o_val is a native value
+            pass
+
+        other = Primitive(o_type, o_val)
+
+        return self == other
 
     def __eq__(self, other):
         if self is other:
             return True
 
-        if self.value == other.value:
-            return True
-
-        if math.isnan(self.value.value) and math.isnan(other.value.value):
-            # FIXME: change this back to True, this is just to help testing failures
+        if not isinstance(other, CScalar):
             return False
 
-        return False
+        if self.primitive != other.primitive:
+            return False
 
-    @classmethod
-    def from_param(cls, obj: float):
-        return cls.floating_type(obj)
+        if self.value is None or other.value is None:
+            return False
 
+        if self.primitive == Primitive.Double or self.primitive == Primitive.Float:
+            if math.isnan(self.value) and math.isnan(other.value):
+                return True
 
-class InvalidTypeError(Exception):
-    pass
+        return self.value == other.value
 
-
-class Parameter:
-    """
-    A wrapper for a parameter to a function
-    """
-
-    def __init__(self, name: str, c_type: CType, is_output: bool):
-        self.name = name
-        self.is_output = is_output
-        self.output_val = None
-
-        if c_type.pointer_level == 0:
-            self.c_type = self.get_scalar_type(c_type.contents)
-        elif c_type.pointer_level == 1:
-            scalar_type = self.get_scalar_type(c_type.contents)
-            self.c_type = type(f"{c_type.contents.capitalize()}Array_{self.name}",
-                               (CArray,),
-                               {"scalar_type": scalar_type,
-                                "output": is_output,
-                                "parameter": self,
-                                })
+    def c_repr(self, with_val: bool) -> str:
+        if not with_val:
+            return self.primitive.name
         else:
-            raise UnsupportedTypeError("multi-level pointers")
+            raise NotImplementedError("sorry")
+
+class CArray:
+    def __init__(self, primitive: Primitive, value: Optional[ArrayValue] = None):
+        self.primitive = primitive
+
+        if value is None:
+            self.val = None
+        else:
+            self.value = value
 
     @property
-    def value(self) -> SomeValue:
-        """
-        Retrieves the value for this parameter
+    def value(self):
+        return self.val
 
-        Only works for output parameters, as this is designed to be used to grab the result value.
+    @value.setter
+    def value(self, value: ArrayValue):
+        assert value is not None
 
-        :return: the value of the parameter
-        """
-        assert self.is_output
+        if not all(isinstance(val, self.primitive.native_type()) for val in value):
+            raise TypeMismatchError(f"{value} is not an array of {self.primitive.name}")
+
+        self.val = value
+
+    def foreign_value(self, length: Optional[int] = None, output: bool = False):
+        assert self.value is not None
+        assert not (length is None and output)
+
+        if length is None:
+            length = len(self.value)
+
+        # ensures array is large enough
+        assert length >= len(self.value)
+
+        if self.primitive == Primitive.Char:
+            # MARK: explicitly grows array to fit a string
+            if length <= len(self.value):
+                length = len(self.value) + 1
+
+            self.value: str
+            s = self.value.encode("ASCII")
+
+            if output:
+                return ctypes.create_string_buffer(s, length)
+            else:
+                c_str = ctypes.c_char_p(length)
+                c_str.value = s
+
+                return c_str
+        else:
+            arr_type = self.primitive.foreign_type() * length
+            return arr_type(*self.value)
+
+    def values_match(self, o_type: Primitive, o_val) -> bool:
+        if o_type != self.primitive:
+            return False
 
         try:
-            # value is a string
-            return self.output_val.value.decode()
+            # assumes it's a string
+            # NOTE: this will only check equality up to the first '\0' character in o_val
+            o_vals = o_val.value
         except AttributeError:
-            # value is a normal array
-            return self.output_val[:]
+            # assumes it's an array (either native or foreign)
+            o_vals = o_val[:]
 
-    # for some reason the @value.setter wasn't working
-    def set_value(self, value: ctypes.Array):
-        """
-        Setter for the parameters value
+        other = Primitive(o_type, o_vals)
 
-        :param value: the new value to keep
-        """
-        self.output_val = value
+        return self == other
 
-    @staticmethod
-    def get_scalar_type(c_type_name: str):
-        """
-        Converts the name of a type into the corresponding ctypes class
+    def __eq__(self, other):
+        if self is other:
+            return True
 
-        :param c_type_name: the name of the C type
-        :return: the class that matches
-        """
-        if c_type_name == "int":
-            return ctypes.c_int
-        elif c_type_name == "float":
-            return type("CustomFloat", (Floating,), {"floating_type": ctypes.c_float})
-        elif c_type_name == "double":
-            return type("CustomDouble", (Floating,), {"floating_type": ctypes.c_double})
-        elif c_type_name == "char":
-            return ctypes.c_char
-        elif c_type_name == "bool":
-            return ctypes.c_bool
-        elif c_type_name == "void":
-            raise InvalidTypeError("check void types separately, there isn't a ctypes representation")
+        if not isinstance(other, CArray):
+            return False
+
+        if self.primitive != other.primitive:
+            return False
+
+        if self.value is None or other.value is None:
+            return False
+
+        if len(self.value) != len(other.value):
+            return False
+
+        prim = self.primitive
+        return all(CScalar(prim, v1) == CScalar(prim, v2) for v1, v2 in zip(self.value, other.value))
+
+    def c_repr(self, with_val: bool) -> str:
+        if not with_val:
+            return f"{self.primitive.name}*"
         else:
-            raise UnsupportedTypeError(c_type_name)
+            raise NotImplementedError("sorry")
+
+    def unpack(self, val) -> ArrayValue:
+        assert val is not None
+
+        if self.primitive == Primitive.Char:
+            return val.value
+        else:
+            return val[:]
+
+
+class CVoid:
+    def __eq__(self, other):
+        return isinstance(other, CVoid)
+
+
+CType = Union[CScalar, CArray]
+
+
+@dataclass
+class CParameter:
+    name: str
+    is_output: bool
+    size: Optional[reference_parser.ParamSize]
+    contents: CType
+    ref: Optional = None  # reference to the ctypes value
+
+    def is_array(self) -> bool:
+        return isinstance(self.contents, CArray)
+
+    def eval_size(self, values: dict) -> Optional[int]:
+        if self.size is None:
+            return None
+
+        assert self.name == self.size.array
+
+        var = self.size.var
+
+        assert var in values
+
+        return values.get(var)
+
+    def c_repr(self, with_val: bool) -> str:
+        if not with_val:
+            return f"{self.contents.c_repr(with_val)} {self.name}"
+        else:
+            raise NotImplementedError("sorry")
 
 
 class Function:
@@ -180,22 +274,39 @@ class Function:
 
         exe = getattr(ctypes.CDLL(lib_path), reference.name)
 
-        self.parameters = tuple(Parameter(param.name, param.type, reference.info.is_output(param))
-                                for param in reference.parameters())
+        self.name = reference.name
+
+        self.parameters = []
+
+        for parameter in reference.parameters:
+            if parameter.type.pointer_level == 0:
+                contents = CScalar(Primitive.get(parameter.type.contents))
+            elif parameter.type.pointer_level == 1:
+                contents = CArray(Primitive.get(parameter.type.contents))
+            else:
+                raise UnsupportedTypeError("multi-level pointer")
+
+            self.parameters.append(CParameter(parameter.name,
+                                              reference.info.is_output(parameter),
+                                              reference.info.size(parameter),
+                                              contents))
+
+        self.type = reference.type
 
         self.add_return_type(exe, reference.type)
-        exe.argtypes = (param.c_type for param in self.parameters)
 
         self.exe = exe
 
-    def run(self, **params):
-        """
-        Run the function with the given parameters
+    def run(self, params: dict[str, SomeValue]):
+        args = []
 
-        :param params: parameter values, matching those given in the reference
-        :return: the return value of the function call
-        """
-        args = [params[param.name] for param in self.parameters]
+        for param in self.parameters:
+            param.contents.value = params[param.name]
+            val = param.contents.foreign_value(length=param.eval_size(params),
+                                               output=param.is_output)
+
+            param.ref = val
+            args.append(val)
 
         try:
             return self.exe(*args)
@@ -210,10 +321,10 @@ class Function:
 
         :return: names and values of all output parameters
         """
-        return {param.name: param.value for param in self.parameters if param.is_output}
+        return {param.name: param.contents.unpack(param.ref) for param in self.parameters if param.is_output}
 
     @staticmethod
-    def add_return_type(exe, ret_type: CType):
+    def add_return_type(exe, ret_type: reference_parser.CType):
         """
         Specifies the return type of a C function
 
@@ -222,19 +333,29 @@ class Function:
         """
         if ret_type.contents == "void":
             exe.restype = None
-        elif ret_type.pointer_level == 0:
-            exe.restype = Parameter.get_scalar_type(ret_type.contents)
+            return
+
+        prim = Primitive.get(ret_type.contents)
+
+        if ret_type.pointer_level == 0:
+            exe.restype = prim.foreign_type()
         elif ret_type.pointer_level == 1:
-            exe.restype = ctypes.POINTER(Parameter.get_scalar_type(ret_type.contents))
+            exe.restype = CArray(prim)
             raise UnsupportedTypeError("return pointers")
         else:
             raise UnsupportedTypeError("multi-level return pointers")
+
+    def safe_parameters(self) -> list[CParameter]:
+        scalars = [param for param in self.parameters if isinstance(param.contents, CScalar)]
+        arrays = [param for param in self.parameters if isinstance(param.contents, CArray)]
+
+        return scalars + arrays
 
 
 class CompilationError(Exception):
     def __init__(self, compilable: str, library: str):
         self.compilable = compilable
-        self.library = compilable
+        self.library = library
 
     def __str__(self):
         return f"issue compiling {self.compilable} into {self.library}"

@@ -2,8 +2,8 @@ from dataclasses import dataclass
 from re import match
 from typing import *
 
-from reference_parser import CType, CParameter, FunctionReference, UnsupportedTypeError
-from runner import SomeValue, AnyValue
+from reference_parser import CType, CParameter, UnsupportedTypeError, FunctionReference
+from runner import Function, SomeValue, AnyValue
 
 Name = NewType("Name", str)
 Parser = NewType("Parser", Callable)
@@ -104,10 +104,18 @@ class ExampleInstance:
         return ExampleInstance(input_vals, ret_val, output_vals)
 
 
-def form(reference: FunctionReference, examples: list[ExampleInstance]) -> list[str]:
-    inputs = [(param.name, param.type) for param in reference.parameters()]
-    value = reference.type
-    outputs = [(param.name, param.type) for param in reference.outputs()]
+def form(reference: Union[Function, FunctionReference], examples: list[ExampleInstance]) -> list[str]:
+    if isinstance(reference, FunctionReference):
+        inputs = [(param.name, param.type) for param in reference.parameters]
+        value = reference.type
+        outputs = [(param.name, param.type) for param in reference.outputs()]
+    else:
+        types = {param.name: param.contents.primitive.value.with_ptr_level(1 if param.is_array() else 0)
+                 for param in reference.parameters}
+
+        inputs = [(param.name, types[param.name]) for param in reference.parameters]
+        value = reference.type
+        outputs = [(param.name, types[param.name]) for param in reference.parameters if param.is_output]
 
     return form_examples(inputs, value, outputs, examples)
 

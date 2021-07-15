@@ -5,8 +5,8 @@ import lumberjack
 import utilities
 from examples import ExampleInstance, ParameterMapping, parse, form
 from randomiser import Randomiser
-from reference_parser import FunctionReference, CParameter, load_reference, UnsupportedTypeError
-from runner import Function, SomeValue, create, FunctionRunError
+from reference_parser import FunctionReference, load_reference, UnsupportedTypeError
+from runner import Function, SomeValue, create, FunctionRunError, CParameter, Primitive
 
 
 class UnsatisfiedDependencyError(Exception):
@@ -22,8 +22,7 @@ class Generator:
     and then retrieves the output produced by that code.
     """
 
-    def __init__(self, reference: FunctionReference, runner: Function):
-        self.reference = reference
+    def __init__(self, runner: Function):
         self.runner = runner
 
         random_seed = 0  # change to `None' outside of testing
@@ -40,9 +39,19 @@ class Generator:
 
         try:
             return [self.generate_single() for _ in range(n)]
-        except FunctionRunError as e:
-            lumberjack.getLogger("error").error(f"issue calling function {self.reference.name}")
+        except FunctionRunError:
+            lumberjack.getLogger("error").error(f"issue calling function {self.runner.name}")
             return []
+
+    def generate_input(self) -> dict[str, SomeValue]:
+        inputs = {}
+
+        for param in self.runner.safe_parameters():
+            self.random(param, inputs)
+
+        return inputs
+
+
 
     def generate_single(self) -> ExampleInstance:
         """
@@ -50,11 +59,9 @@ class Generator:
 
         :return: the example generated
         """
-        inputs = {}
-        for param in self.reference.parameters(safe_order=True):
-            self.random(param, inputs)
+        inputs = self.generate_input()
 
-        value = self.runner.run(**inputs)
+        value = self.runner.run(inputs)
 
         outputs = self.runner.outputs()
 
@@ -71,36 +78,30 @@ class Generator:
         :param current: the values already generated
         :return: the new parameter value
         """
-        assert 0 <= parameter.type.pointer_level < 2
 
-        scalar_type = parameter.type.contents
+        primitive = parameter.contents.primitive
         # add in any range changes here
         # NOTE: that's why they're all lambdas
-        if scalar_type == "int":
+        if primitive == Primitive.Int:
             gen = lambda: self.randomiser.random_int()
-        elif scalar_type == "float":
+        elif primitive == Primitive.Float:
             gen = lambda: self.randomiser.random_float()
-        elif scalar_type == "double":
+        elif primitive == Primitive.Double:
             gen = lambda: self.randomiser.random_double()
-        elif scalar_type == "char":
+        elif primitive == Primitive.Char:
             gen = lambda: self.randomiser.random_char()
-        elif scalar_type == "bool":
+        elif primitive == Primitive.Bool:
             gen = lambda: self.randomiser.random_bool()
         else:
-            raise UnsupportedTypeError(scalar_type)
+            raise UnsupportedTypeError(primitive.name)
 
-        if parameter.type.pointer_level == 0:
+        if not parameter.is_array():
             val = gen()
-        elif parameter.type.contents == "char":
+        elif primitive == Primitive.Char:
             max_str_len = 100
             val = self.randomiser.random_string(max_str_len)
         else:
-            size = self.reference.info.size(parameter)
-
-            if size not in current:
-                raise UnsatisfiedDependencyError(f"could not find size ({size}) for parameter ({parameter.name})")
-            else:
-                size = current[size]
+            size = parameter.eval_size(current)
 
             val = self.randomiser.random_array(size, gen)
 
@@ -115,7 +116,7 @@ class Generator:
         :param file_name: file to write into
         """
         with open(file_name, "w") as f:
-            output = form(self.reference, examples)
+            output = form(self.runner, examples)
             f.writelines(f"{line}\n" for line in output)
 
 
@@ -169,8 +170,7 @@ class Evaluator:
     Evaluates functions on examples
     """
 
-    def __init__(self, reference: FunctionReference, runner: Function):
-        self.reference = reference
+    def __init__(self, runner: Function):
         self.runner = runner
 
     @staticmethod
@@ -209,7 +209,7 @@ class Evaluator:
         :param example: the example to use
         :return: whether or not the output of the example matches the expected output
         """
-        val = self.runner.run(**example.inputs)
+        val = self.runner.run(example.inputs)
         expected = example.outputs
         actual = self.runner.outputs()
 
@@ -245,7 +245,7 @@ class Evaluator:
         return Result(passes, len(examples), failures)
 
 
-def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
+def evaluate(run: Function, ex_file: str) -> Result:
     """
     Helper method to check a reference function against examples
 
@@ -254,7 +254,7 @@ def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
     :param ex_file: the examples to evaluate with
     :return: the evaluation result of the test
     """
-    e = Evaluator(ref, run)
+    e = Evaluator(run)
     examples = e.read(ex_file)
     result = e.check(examples)
 
@@ -263,7 +263,7 @@ def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
     return result
 
 
-def generate(ref: FunctionReference, run: Function, n: int, ex_file: str = None) -> list[ExampleInstance]:
+def generate(run: Function, n: int, ex_file: str = None) -> list[ExampleInstance]:
     """
     Helper method to produce examples to check against a function
 
@@ -273,7 +273,7 @@ def generate(ref: FunctionReference, run: Function, n: int, ex_file: str = None)
     :param ex_file: the file to save the examples into, if :code:`None` then don't write anywhere
     :return: the examples produced
     """
-    g = Generator(ref, run)
+    g = Generator(run)
     examples = g.generate(n)
 
     if ex_file is not None:
@@ -312,13 +312,13 @@ if __name__ == '__main__':
             # generate examples using the gcc compiled reference function
             # NOT the sample implementation
             example_run = create(args.ref)
-            generate(ref, example_run, default_examples, example_file)
+            generate(example_run, default_examples, ex_file=example_file)
         else:
             example_file = args.examples
 
-        evaluate(ref, run, example_file).show()
+        print(evaluate(run, example_file).full(True))
     except AttributeError:
         # it's a gen instead
         run = create(args.ref)
         assert args.num_examples > 0
-        generate(ref, run, args.num_examples, args.examples)
+        generate(run, args.num_examples, ex_file=args.examples)
