@@ -5,7 +5,7 @@ import lumberjack
 import utilities
 from examples import ExampleInstance, ParameterMapping, parse, form
 from randomiser import Randomiser
-from reference_parser import FunctionReference, load_reference, UnsupportedTypeError
+from reference_parser import load_reference, UnsupportedTypeError
 from runner import Function, SomeValue, create, FunctionRunError, CParameter, Primitive
 
 
@@ -51,8 +51,6 @@ class Generator:
 
         return inputs
 
-
-
     def generate_single(self) -> ExampleInstance:
         """
         Used to generate one example
@@ -81,27 +79,32 @@ class Generator:
 
         primitive = parameter.contents.primitive
         # add in any range changes here
-        # NOTE: that's why they're all lambdas
+        # NOTE: that's why they're all funcs
         if primitive == Primitive.Int:
-            gen = lambda: self.randomiser.random_int()
+            def gen():
+                return self.randomiser.random_int()
         elif primitive == Primitive.Float:
-            gen = lambda: self.randomiser.random_float()
+            def gen():
+                return self.randomiser.random_float()
         elif primitive == Primitive.Double:
-            gen = lambda: self.randomiser.random_double()
+            def gen():
+                return self.randomiser.random_double()
         elif primitive == Primitive.Char:
-            gen = lambda: self.randomiser.random_char()
+            def gen():
+                return self.randomiser.random_char()
         elif primitive == Primitive.Bool:
-            gen = lambda: self.randomiser.random_bool()
+            def gen():
+                return self.randomiser.random_bool()
         else:
             raise UnsupportedTypeError(primitive.name)
 
         if not parameter.is_array():
             val = gen()
         elif primitive == Primitive.Char:
-            max_str_len = 100
+            max_str_len = parameter.size.evaluate(current, initial=True)
             val = self.randomiser.random_string(max_str_len)
         else:
-            size = parameter.eval_size(current)
+            size = parameter.size.evaluate(current, initial=True)
 
             val = self.randomiser.random_array(size, gen)
 
@@ -127,7 +130,8 @@ class Failure:
         self.outputs = outputs
 
     def __str__(self):
-        return f"input {self.expected.inputs} produced incorrect values (expected vs. real); {self.expected.value} vs. {self.value}; {self.expected.outputs} vs. {self.outputs}"
+        return f"input {self.expected.inputs} produced incorrect values (expected vs. real);\
+         {self.expected.value} vs. {self.value}; {self.expected.outputs} vs. {self.outputs}"
 
 
 class Result:

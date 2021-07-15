@@ -83,7 +83,7 @@ class CScalar:
 
         self.value = value
 
-    def foreign_value(self, **kwargs):
+    def foreign_value(self):
         assert self.value is not None
         return self.primitive.foreign_type()(self.value)
 
@@ -167,7 +167,7 @@ class CArray:
             if output:
                 return ctypes.create_string_buffer(s, length)
             else:
-                c_str = ctypes.c_char_p(length)
+                c_str = ctypes.c_char_p(bytes(length))
                 c_str.value = s
 
                 return c_str
@@ -237,24 +237,12 @@ CType = Union[CScalar, CArray]
 class CParameter:
     name: str
     is_output: bool
-    size: Optional[reference_parser.ParamSize]
+    size: reference_parser.ParamSize
     contents: CType
     ref: Optional = None  # reference to the ctypes value
 
     def is_array(self) -> bool:
         return isinstance(self.contents, CArray)
-
-    def eval_size(self, values: dict) -> Optional[int]:
-        if self.size is None:
-            return None
-
-        assert self.name == self.size.array
-
-        var = self.size.var
-
-        assert var in values
-
-        return values.get(var)
 
     def c_repr(self, with_val: bool) -> str:
         if not with_val:
@@ -302,8 +290,15 @@ class Function:
 
         for param in self.parameters:
             param.contents.value = params[param.name]
-            val = param.contents.foreign_value(length=param.eval_size(params),
-                                               output=param.is_output)
+
+            try:
+                if param.is_array() and isinstance(param.size, reference_parser.ExprSize):
+                    val = param.contents.foreign_value(length=param.size.evaluate(params, initial=False),
+                                                       output=param.is_output)
+                else:
+                    val = param.contents.foreign_value()
+            except TypeError as e:
+                print("uh oh")
 
             param.ref = val
             args.append(val)
@@ -340,7 +335,7 @@ class Function:
         if ret_type.pointer_level == 0:
             exe.restype = prim.foreign_type()
         elif ret_type.pointer_level == 1:
-            exe.restype = CArray(prim)
+            exe.restype = ctypes.POINTER(prim.foreign_type())
             raise UnsupportedTypeError("return pointers")
         else:
             raise UnsupportedTypeError("multi-level return pointers")

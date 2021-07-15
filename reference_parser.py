@@ -170,29 +170,76 @@ class FunctionSignature:
 
 @dataclass
 class ParamSize:
-    """
-    Denotes an association between a array parameter, and a scalar parameter containing the array's size
-    """
-    array: str
-    var: str
+    arr: str
 
     @staticmethod
     def parse(size: str):
-        """
-        Build a ParamSize instance from a size description string.
+        size = size.lstrip()
 
-        These strings are in the form given in *props* files, e.g.
+        parts = re.finditer(r"\s*,\s*", size)
 
-        "size arr_name scalar_name"
+        part = next(parts)
+        arr_end, next_start = part.span()
 
-        :param size: the description
-        :return: the ParamSize instance
-        """
-        parts = size.removeprefix("size").strip().split(",")
+        arr = size[:part.span()[0]]
+        try:
+            part = next(parts)
+            val_end, expr_start = part.span()
 
-        assert (len(parts) == 2)
+            val = int(size[next_start:val_end])
+            expr = size[expr_start:].rstrip()
 
-        return ParamSize(parts[0].strip(), parts[1].strip())
+            assert expr.startswith("{") and expr.endswith("}")
+
+            return ExprSize(arr, val, expr[1:-1])
+        except StopIteration:
+            try:
+                val = int(size[next_start:])
+                return ConstSize(arr, val)
+            except ValueError:
+                var = size[next_start:].rstrip()
+                return VarSize(arr, var)
+
+    def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
+        if isinstance(self, ExprSize):
+            if initial:
+                return self.init
+            else:
+                size = eval(self.expr, values)
+                assert size is not None and isinstance(size, int)
+
+                return size
+        elif isinstance(self, ConstSize):
+            return self.size
+        else:
+            assert isinstance(self, VarSize)
+
+            var = self.var
+            assert var in values
+
+            return values.get(var)
+
+
+@dataclass
+class VarSize(ParamSize):
+    """
+    Denotes an association between a array parameter, and a scalar parameter containing the array's size
+    """
+    arr: str
+    var: str
+
+
+@dataclass
+class ConstSize(ParamSize):
+    arr: str
+    size: int
+
+
+@dataclass
+class ExprSize(ParamSize):
+    arr: str
+    init: int
+    expr: str
 
 
 @dataclass
@@ -233,7 +280,7 @@ class FunctionArrayInfo:
         return param.name in self.outputs
 
     def size(self, param: CParameter) -> Optional[ParamSize]:
-        return {size.array: size for size in self.sizes}.get(param.name)
+        return {size.arr: size for size in self.sizes}.get(param.name)
 
 
 @dataclass
@@ -343,7 +390,7 @@ class FunctionReference:
 
         return FunctionReference(props.sig, props.arr_info, ref)
 
-    def issues(self) -> Set[ParseIssue]:
+    def issues(self, fix: bool = False) -> Set[ParseIssue]:
         """
         Check this FunctionReference for any issues.
 
@@ -378,28 +425,46 @@ class FunctionReference:
 
         for output in self.info.outputs:
             if param_dict[output].pointer_level == 0:
-                issues.add(ParseIssue.ScalarOutputParameter)
+                if fix:
+                    self.info.outputs.remove(output)
+                else:
+                    issues.add(ParseIssue.ScalarOutputParameter)
 
         sized = set()
         for size in self.info.sizes:
-            array = size.array
-            var = size.var
+            array = size.arr
             sized.add(array)
 
             if array not in array_params:
-                issues.add(ParseIssue.ScalarGivenSize)
+                if fix:
+                    self.info.sizes.remove(size)
+                else:
+                    issues.add(ParseIssue.ScalarGivenSize)
 
-            if param_dict[var].contents not in {"int"}:
-                issues.add(ParseIssue.GivenInvalidSize)
+            if isinstance(size, VarSize):
+                var = size.var
+
+                if param_dict[var].contents not in {"int"}:
+                    issues.add(ParseIssue.GivenInvalidSize)
+            elif isinstance(size, ConstSize):
+                if size.size < 0:
+                    issues.add(ParseIssue.GivenInvalidSize)
+            elif isinstance(size, ExprSize):
+                if size.init < 0:
+                    issues.add(ParseIssue.GivenInvalidSize)
 
         for array in array_params - sized:
-            if param_dict[array].contents not in {"char"}:
+            if fix and param_dict[array] == CType("char", 1):
+                default_str_size = 100
+                self.info.sizes.append(ConstSize(array, default_str_size))
+            else:
                 issues.add(ParseIssue.UnsizedArrayParameter)
 
         code = self.code
         ref_signature = FunctionSignature.parse(code[:code.find("{")])
 
         if ref_signature != self.signature:
+            # try and fix here if possible
             issues.add(ParseIssue.ReferenceSignatureMismatch)
 
         return issues
@@ -483,15 +548,17 @@ def show_single(path_to_ref: str) -> None:
     :param prog_name: the name of the function directory
     """
     contents = FunctionReference.parse(path_to_ref)
-    issues = contents.issues()
+    issues = contents.issues(fix=True)
 
-    print(dumps(asdict(contents), indent=4))
-    contents.show_issues(issues, verbose=True)
+    if issues:
+        contents.show_issues(issues, verbose=True)
+    else:
+        print(dumps(asdict(contents), indent=4))
 
 
 def load_reference(path_to_reference: str, log_issues: Callable = FunctionReference.log_issues) -> FunctionReference:
     func = FunctionReference.parse(path_to_reference)
-    issues = func.issues()
+    issues = func.issues(fix=True)
 
     log_issues(func, issues)
     func.validate(issues)

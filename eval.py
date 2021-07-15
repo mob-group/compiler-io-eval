@@ -137,7 +137,7 @@ class ReferenceResult:
     @staticmethod
     def gen_report(results: list, verbose: bool, show_failures: bool = True, partitioned: bool = True) -> str:
         def stringify_many(items: Iterable) -> str:
-            assert verbose != False and show_failures == True  # just a meaningless use case
+            assert verbose is not False and show_failures is not True  # just a meaningless use case
 
             return "\n".join(item.full(show_failures) if verbose else str(item) for item in items)
 
@@ -206,10 +206,7 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[Refere
 
     results = []
     for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts):
-        try:
-            results.append(test_reference(reference, impls, examples))
-        except AssertionError:
-            continue
+        results.append(test_reference(reference, impls, examples))
 
     return results
 
