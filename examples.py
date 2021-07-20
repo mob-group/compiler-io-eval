@@ -3,17 +3,12 @@ from re import match
 from typing import *
 
 from reference_parser import CType, CParameter, UnsupportedTypeError, FunctionReference
-from runner import Function, SomeValue, AnyValue
-
-Name = NewType("Name", str)
-Parser = NewType("Parser", Callable)
-
-ParameterMapping = dict[Name, SomeValue]
-TypeMapping = list[tuple[Name, CType]]
-ParserMapping = list[tuple[Name, Parser]]
+from helper_types import *
 
 base_str = "({inputs}) {value} ({outputs})"
 
+TypeMapping = list[tuple[Name, CType]]
+ParserMapping = list[tuple[Name, Parser]]
 
 @dataclass
 class ExampleInstance:
@@ -104,18 +99,23 @@ class ExampleInstance:
         return ExampleInstance(input_vals, ret_val, output_vals)
 
 
-def form(reference: Union[Function, FunctionReference], examples: list[ExampleInstance]) -> list[str]:
+def form(reference: FunctionReference, examples: list[ExampleInstance]) -> list[str]:
+    '''
     if isinstance(reference, FunctionReference):
         inputs = [(param.name, param.type) for param in reference.parameters]
         value = reference.type
         outputs = [(param.name, param.type) for param in reference.outputs()]
     else:
-        types = {param.name: param.contents.primitive.value.with_ptr_level(1 if param.is_array() else 0)
+        types = {param.name: param.contents.primitive.value.with_ptr_level(1 if param.is_array else 0)
                  for param in reference.parameters}
 
         inputs = [(param.name, types[param.name]) for param in reference.parameters]
         value = reference.type
         outputs = [(param.name, types[param.name]) for param in reference.parameters if param.is_output]
+    '''
+    inputs = [(param.name, param.type) for param in reference.parameters]
+    value = reference.type
+    outputs = [(param.name, param.type) for param in reference.outputs()]
 
     return form_examples(inputs, value, outputs, examples)
 

@@ -1,16 +1,15 @@
 from textwrap import indent, dedent
 from typing import Optional, Any
 
+import math
+
 import lumberjack
 import utilities
-from examples import ExampleInstance, ParameterMapping, parse, form
+from examples import ExampleInstance, parse, form
 from randomiser import Randomiser
-from reference_parser import load_reference, UnsupportedTypeError
-from runner import Function, SomeValue, create, FunctionRunError, CParameter, Primitive
-
-
-class UnsatisfiedDependencyError(Exception):
-    pass
+from reference_parser import load_reference, FunctionReference
+from runner import Function, create, create_from, FunctionRunError, Parameter
+from helper_types import *
 
 
 class Generator:
@@ -38,7 +37,20 @@ class Generator:
         assert n > 0
 
         try:
-            return [self.generate_single() for _ in range(n)]
+            examples = []
+            fails = 0
+            max_fails = n
+
+            while fails < max_fails and len(examples) < n:
+                example = self.generate_single()
+
+                if example is not None:
+                    examples.append(example)
+                    fails -= 1
+                else:
+                    fails += 1
+
+            return examples
         except FunctionRunError:
             lumberjack.getLogger("error").error(f"issue calling function {self.runner.name}")
             return []
@@ -47,11 +59,11 @@ class Generator:
         inputs = {}
 
         for param in self.runner.safe_parameters():
-            self.random(param, inputs)
+            inputs[param.name] = self.random(param, inputs)
 
         return inputs
 
-    def generate_single(self) -> ExampleInstance:
+    def generate_single(self) -> Optional[ExampleInstance]:
         """
         Used to generate one example
 
@@ -59,13 +71,16 @@ class Generator:
         """
         inputs = self.generate_input()
 
+        if not self.runner.satisfied(inputs):
+            return None
+
         value = self.runner.run(inputs)
 
         outputs = self.runner.outputs()
 
         return ExampleInstance(inputs, value, outputs)
 
-    def random(self, parameter: CParameter, current: ParameterMapping) -> SomeValue:
+    def random(self, parameter: Parameter, current: ParameterMapping) -> SomeValue:
         """
         Generate a random value for an input parameter
 
@@ -77,50 +92,38 @@ class Generator:
         :return: the new parameter value
         """
 
-        primitive = parameter.contents.primitive
+        primitive = parameter.type.contents
+        # TODO: use paramter constraints to select from valid range
         # add in any range changes here
         # NOTE: that's why they're all funcs
-        if primitive == Primitive.Int:
+        if primitive == "int":
             def gen():
                 return self.randomiser.random_int()
-        elif primitive == Primitive.Float:
+        elif primitive == "float":
             def gen():
                 return self.randomiser.random_float()
-        elif primitive == Primitive.Double:
+        elif primitive == "double":
             def gen():
                 return self.randomiser.random_double()
-        elif primitive == Primitive.Char:
+        elif primitive == "char":
             def gen():
                 return self.randomiser.random_char()
-        elif primitive == Primitive.Bool:
+        elif primitive == "bool":
             def gen():
                 return self.randomiser.random_bool()
         else:
-            raise UnsupportedTypeError(primitive.name)
+            raise UnsupportedTypeError(primitive)
 
         if not parameter.is_array():
             val = gen()
-        elif primitive == Primitive.Char:
-            max_str_len = parameter.size.evaluate(current, initial=True)
-            val = self.randomiser.random_string(max_str_len)
         else:
-            size = parameter.size.evaluate(current, initial=True)
+            size = parameter.get_size(None, current)
 
             val = self.randomiser.random_array(size, gen)
+            return val if primitive != "char" else ''.join(val)
 
         current[parameter.name] = val
         return val
-
-    def write(self, examples: list[ExampleInstance], file_name: str):
-        """
-        Writes the given examples to a file
-
-        :param examples: examples to write
-        :param file_name: file to write into
-        """
-        with open(file_name, "w") as f:
-            output = form(self.runner, examples)
-            f.writelines(f"{line}\n" for line in output)
 
 
 class Failure:
@@ -213,17 +216,27 @@ class Evaluator:
         :param example: the example to use
         :return: whether or not the output of the example matches the expected output
         """
-        val = self.runner.run(example.inputs)
+        def check_value(expected_value: AnyValue, actual_value: AnyValue) -> bool:
+            if expected_value == actual_value:
+                return True
+
+            try:
+                return math.isnan(expected_value) == math.isnan(actual_value)
+            except TypeError:
+                return False
+
+        value = self.runner.run(example.inputs)
+
         expected = example.outputs
         actual = self.runner.outputs()
 
-        fail = Failure(example, val, actual)
+        fail = Failure(example, value, actual)
 
-        if val != example.value or (val is float("nan") and example.value is float("nan")):
+        if not check_value(example.value, value):
             return fail
 
         for param in expected:
-            if expected[param] != actual[param]:
+            if not check_value(expected[param], actual[param]):
                 return fail
 
         return None
@@ -267,7 +280,7 @@ def evaluate(run: Function, ex_file: str) -> Result:
     return result
 
 
-def generate(run: Function, n: int, ex_file: str = None) -> list[ExampleInstance]:
+def generate(run: Function, n: int) -> list[ExampleInstance]:
     """
     Helper method to produce examples to check against a function
 
@@ -280,12 +293,22 @@ def generate(run: Function, n: int, ex_file: str = None) -> list[ExampleInstance
     g = Generator(run)
     examples = g.generate(n)
 
-    if ex_file is not None:
-        g.write(examples, ex_file)
-
     return examples
 
+def write_examples(ref: FunctionReference, examples: list[ExampleInstance], ex_file: str):
+    with open(ex_file, "w") as f:
+        f.write('\n'.join(form(ref, examples)))
 
+if __name__ == '__main__':
+    ref_dir = "synthesis-eval/examples/str_cat"
+    ref = load_reference(ref_dir)
+    run = create_from(ref, f"{ref_dir}/ref.c", lib_path="test.so")
+    egs = generate(run, 200)
+    write_examples(ref, egs, "test.examples")
+    print(evaluate(run, "test.examples").full(True))
+
+
+'''
 if __name__ == '__main__':
     import argparse
 
@@ -316,13 +339,17 @@ if __name__ == '__main__':
             # generate examples using the gcc compiled reference function
             # NOT the sample implementation
             example_run = create(args.ref)
-            generate(example_run, default_examples, ex_file=example_file)
+            examples = generate(example_run, default_examples)
+            write_examples(ref, examples, example_file)
         else:
             example_file = args.examples
 
         print(evaluate(run, example_file).full(True))
     except AttributeError:
         # it's a gen instead
-        run = create(args.ref)
+        ref = load_reference(args.ref)
+        run = create_from(ref, )
         assert args.num_examples > 0
-        generate(run, args.num_examples, ex_file=args.examples)
+        examples = generate(run, args.num_examples)
+        write_examples()
+'''

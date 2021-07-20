@@ -1,254 +1,131 @@
 import ctypes
-import math
 import os.path
 from dataclasses import dataclass
-from enum import Enum
 from typing import *
 
 import lumberjack
+import randomiser
 import reference_parser
 import utilities
-from reference_parser import UnsupportedTypeError, FunctionReference
-
-ScalarValue = Union[int, float, bool, str]
-ArrayValue = Union[str, list[ScalarValue]]
-SomeValue = Union[ScalarValue, ArrayValue]
-AnyValue = Union[SomeValue, None]
-
-ScalarCType = Union[ctypes.c_int, ctypes.c_float, ctypes.c_double, ctypes.c_char, ctypes.c_double]
-
-
-class FunctionRunError(Exception):
-    pass
-
-
-class Primitive(Enum):
-    Int = reference_parser.CType("int", 0)
-    Float = reference_parser.CType("float", 0)
-    Double = reference_parser.CType("double", 0)
-    Char = reference_parser.CType("char", 0)
-    Bool = reference_parser.CType("bool", 0)
-
-    @staticmethod
-    def get(c_type: str):
-        primitive: Primitive
-        for primitive in Primitive:
-            if c_type == primitive.value.contents:
-                return primitive
-
-        raise reference_parser.UnsupportedTypeError(c_type)
-
-    def native_type(self):
-        if self == Primitive.Int:
-            return int
-        elif self == Primitive.Float:
-            return float
-        elif self == Primitive.Double:
-            return float
-        elif self == Primitive.Char:
-            return str
-        elif self == Primitive.Bool:
-            return bool
-
-    def foreign_type(self):
-        if self == Primitive.Int:
-            return ctypes.c_int
-        elif self == Primitive.Float:
-            return ctypes.c_float
-        elif self == Primitive.Double:
-            return ctypes.c_double
-        elif self == Primitive.Char:
-            return ctypes.c_char
-        elif self == Primitive.Bool:
-            return ctypes.c_bool
-
-    @property
-    def name(self) -> str:
-        return self.value.contents
-
-
-class TypeMismatchError(Exception):
-    pass
-
-
-class CScalar:
-    primitive: Primitive
-    value: Optional[SomeValue] = None
-
-    def __init__(self, primitive: Primitive, value: Optional[ScalarValue] = None):
-        self.primitive = primitive
-
-        if value is not None and not isinstance(value, primitive.native_type()):
-            raise TypeMismatchError(f"{value} is not a {primitive.name}")
-
-        self.value = value
-
-    def foreign_value(self):
-        assert self.value is not None
-        return self.primitive.foreign_type()(self.value)
-
-    def values_match(self, o_type: Primitive, o_val) -> bool:
-        try:
-            # if o_val is a c_types value
-            o_val = o_val.value
-        except AttributeError:
-            # if o_val is a native value
-            pass
-
-        other = Primitive(o_type, o_val)
-
-        return self == other
-
-    def __eq__(self, other):
-        if self is other:
-            return True
-
-        if not isinstance(other, CScalar):
-            return False
-
-        if self.primitive != other.primitive:
-            return False
-
-        if self.value is None or other.value is None:
-            return False
-
-        if self.primitive == Primitive.Double or self.primitive == Primitive.Float:
-            if math.isnan(self.value) and math.isnan(other.value):
-                return True
-
-        return self.value == other.value
-
-    def c_repr(self, with_val: bool) -> str:
-        if not with_val:
-            return self.primitive.name
-        else:
-            raise NotImplementedError("sorry")
-
-class CArray:
-    def __init__(self, primitive: Primitive, value: Optional[ArrayValue] = None):
-        self.primitive = primitive
-
-        if value is None:
-            self.val = None
-        else:
-            self.value = value
-
-    @property
-    def value(self):
-        return self.val
-
-    @value.setter
-    def value(self, value: ArrayValue):
-        assert value is not None
-
-        if not all(isinstance(val, self.primitive.native_type()) for val in value):
-            raise TypeMismatchError(f"{value} is not an array of {self.primitive.name}")
-
-        self.val = value
-
-    def foreign_value(self, length: Optional[int] = None, output: bool = False):
-        assert self.value is not None
-        assert not (length is None and output)
-
-        if length is None:
-            length = len(self.value)
-
-        # ensures array is large enough
-        assert length >= len(self.value)
-
-        if self.primitive == Primitive.Char:
-            # MARK: explicitly grows array to fit a string
-            if length <= len(self.value):
-                length = len(self.value) + 1
-
-            self.value: str
-            s = self.value.encode("ASCII")
-
-            if output:
-                return ctypes.create_string_buffer(s, length)
-            else:
-                c_str = ctypes.c_char_p(bytes(length))
-                c_str.value = s
-
-                return c_str
-        else:
-            arr_type = self.primitive.foreign_type() * length
-            return arr_type(*self.value)
-
-    def values_match(self, o_type: Primitive, o_val) -> bool:
-        if o_type != self.primitive:
-            return False
-
-        try:
-            # assumes it's a string
-            # NOTE: this will only check equality up to the first '\0' character in o_val
-            o_vals = o_val.value
-        except AttributeError:
-            # assumes it's an array (either native or foreign)
-            o_vals = o_val[:]
-
-        other = Primitive(o_type, o_vals)
-
-        return self == other
-
-    def __eq__(self, other):
-        if self is other:
-            return True
-
-        if not isinstance(other, CArray):
-            return False
-
-        if self.primitive != other.primitive:
-            return False
-
-        if self.value is None or other.value is None:
-            return False
-
-        if len(self.value) != len(other.value):
-            return False
-
-        prim = self.primitive
-        return all(CScalar(prim, v1) == CScalar(prim, v2) for v1, v2 in zip(self.value, other.value))
-
-    def c_repr(self, with_val: bool) -> str:
-        if not with_val:
-            return f"{self.primitive.name}*"
-        else:
-            raise NotImplementedError("sorry")
-
-    def unpack(self, val) -> ArrayValue:
-        assert val is not None
-
-        if self.primitive == Primitive.Char:
-            return val.value
-        else:
-            return val[:]
-
-
-class CVoid:
-    def __eq__(self, other):
-        return isinstance(other, CVoid)
-
-
-CType = Union[CScalar, CArray]
+from helper_types import *
+from reference_parser import FunctionReference, ParamSize, Constraint, GlobalContstraint, \
+    ParamConstraint, CType
 
 
 @dataclass
-class CParameter:
+class Parameter:
     name: str
+    type: CType
     is_output: bool
-    size: reference_parser.ParamSize
-    contents: CType
-    ref: Optional = None  # reference to the ctypes value
+    constraints: list[ParamConstraint]
+
+    size: Optional[ParamSize] = None
+    ref: Optional = None
+
+    def pack(self, value: SomeValue, length: Optional[int] = None):
+        assert self.type != CType("void", 0)
+        if self.type.contents == "char":
+            value = value.encode("ascii")
+
+        def scalar():
+            return self.primitive()(value)
+
+        def array():
+            return (self.primitive() * length)(*value)
+
+        def string():
+            if self.is_output:
+                return ctypes.create_string_buffer(value, length+1)
+            else:
+                sized = ctypes.c_char_p(b'0' * length)
+                sized.value = value
+
+                return sized
+
+        if self.type.pointer_level < 0 or self.type.pointer_level > 1:
+            raise UnsupportedTypeError("non-scalar/array")
+
+        if self.type.pointer_level == 0:
+            self.ref = scalar()
+        elif self.type.pointer_level == 1:
+            assert length is not None
+
+            if self.type.contents == "char":
+                self.ref = string()
+            else:
+                self.ref = array()
+
+        return self.ref
+
+    def unpack(self, foreign) -> AnyValue:
+        if self.type.contents == "void":
+            return None
+
+        if not self.is_array():
+            return foreign.value
+        elif self.type.contents == "char":
+            return foreign.value.decode()
+        else:
+            return foreign[:]
+
+    def primitive(self):
+        prim = self.type.contents
+
+        if prim == "int":
+            return ctypes.c_int
+        elif prim == "float":
+            return ctypes.c_float
+        elif prim == "double":
+            return ctypes.c_double
+        elif prim == "char":
+            return ctypes.c_char
+        elif prim == "bool":
+            return ctypes.c_bool
+        else:
+            raise UnsupportedTypeError(prim)
 
     def is_array(self) -> bool:
-        return isinstance(self.contents, CArray)
+        return self.type.pointer_level == 1
 
-    def c_repr(self, with_val: bool) -> str:
-        if not with_val:
-            return f"{self.contents.c_repr(with_val)} {self.name}"
+    def get_size(self, value: Optional[ArrayValue], values: ParameterMapping) -> int:
+        def with_val():
+            size = self.size.evaluate(values, False)
+            if isinstance(self.size, reference_parser.ConstSize):
+                return len(value)
+            else:
+                assert size >= len(value)
+                return size
+
+        def without_val():
+            size = self.size.evaluate(values, True)
+            if isinstance(self.size, reference_parser.ConstSize) or isinstance(self.size, reference_parser.ExprSize):
+                return randomiser.Randomiser().random_int(max_val=size)
+            else:
+                return size
+
+        if value is None:
+            return without_val()
         else:
-            raise NotImplementedError("sorry")
+            return with_val()
+
+    @property
+    def value(self):
+        assert self.is_output and self.ref is not None
+        return self.unpack(self.ref)
+
+
+def get_parameters(parameters: list[reference_parser.CParameter],
+                   param_info: reference_parser.FunctionInfo,
+                   param_constraints: dict[str, list[Constraint]]):
+
+    def fill_parameter(parameter: reference_parser.CParameter):
+        return Parameter(parameter.name,
+                         parameter.type,
+                         param_info.is_output(parameter),
+                         param_constraints.get(parameter.name, []),
+                         size=param_info.size(parameter))
+
+    return [fill_parameter(parameter) for parameter in parameters]
 
 
 class Function:
@@ -264,51 +141,41 @@ class Function:
 
         self.name = reference.name
 
-        self.parameters = []
+        self.constraints, param_constraints = self.split_constraints(reference.info.constraints)
 
-        for parameter in reference.parameters:
-            if parameter.type.pointer_level == 0:
-                contents = CScalar(Primitive.get(parameter.type.contents))
-            elif parameter.type.pointer_level == 1:
-                contents = CArray(Primitive.get(parameter.type.contents))
-            else:
-                raise UnsupportedTypeError("multi-level pointer")
-
-            self.parameters.append(CParameter(parameter.name,
-                                              reference.info.is_output(parameter),
-                                              reference.info.size(parameter),
-                                              contents))
+        self.parameters = get_parameters(reference.parameters, reference.info, param_constraints)
 
         self.type = reference.type
 
-        self.add_return_type(exe, reference.type)
+        # only works for scalar outputs
+        if reference.type == CType("void", 0):
+            exe.restype = None
+        else:
+            assert reference.type.pointer_level == 0
+            return_val = Parameter(f"{self.name}_return", reference.type, True, [])
+            exe.restype = return_val.primitive()
 
         self.exe = exe
 
-    def run(self, params: dict[str, SomeValue]):
-        args = []
+    def run(self, params: ParameterMapping):
+        def setup_arg(parameter: Parameter):
+            native_val = params[parameter.name]
 
-        for param in self.parameters:
-            param.contents.value = params[param.name]
+            size = parameter.get_size(native_val, params) if parameter.is_array() else None
+            foreign_val = parameter.pack(native_val, size)
 
-            try:
-                if param.is_array() and isinstance(param.size, reference_parser.ExprSize):
-                    val = param.contents.foreign_value(length=param.size.evaluate(params, initial=False),
-                                                       output=param.is_output)
-                else:
-                    val = param.contents.foreign_value()
-            except TypeError as e:
-                print("uh oh")
+            parameter.ref = foreign_val
 
-            param.ref = val
-            args.append(val)
+            return foreign_val
+
+        args = [setup_arg(param) for param in self.parameters]
 
         try:
             return self.exe(*args)
-        except ctypes.ArgumentError:
-            raise FunctionRunError("could not build function types")
+        except Exception as e:
+            raise FunctionRunError(f"could not run function {self.name}")
 
-    def outputs(self):
+    def outputs(self) -> ParameterMapping:
         """
         Get the values of the output parameters
 
@@ -316,44 +183,41 @@ class Function:
 
         :return: names and values of all output parameters
         """
-        return {param.name: param.contents.unpack(param.ref) for param in self.parameters if param.is_output}
+        return {param.name: param.value for param in self.parameters if param.is_output}
 
-    @staticmethod
-    def add_return_type(exe, ret_type: reference_parser.CType):
-        """
-        Specifies the return type of a C function
-
-        :param exe: the Function object to give a return type to
-        :param ret_type: the representation of its type
-        """
-        if ret_type.contents == "void":
-            exe.restype = None
-            return
-
-        prim = Primitive.get(ret_type.contents)
-
-        if ret_type.pointer_level == 0:
-            exe.restype = prim.foreign_type()
-        elif ret_type.pointer_level == 1:
-            exe.restype = ctypes.POINTER(prim.foreign_type())
-            raise UnsupportedTypeError("return pointers")
-        else:
-            raise UnsupportedTypeError("multi-level return pointers")
-
-    def safe_parameters(self) -> list[CParameter]:
-        scalars = [param for param in self.parameters if isinstance(param.contents, CScalar)]
-        arrays = [param for param in self.parameters if isinstance(param.contents, CArray)]
+    def safe_parameters(self) -> list[Parameter]:
+        scalars = [param for param in self.parameters if not param.is_array()]
+        arrays = [param for param in self.parameters if param.is_array()]
 
         return scalars + arrays
 
+    @staticmethod
+    def split_constraints(constraints: list[reference_parser.Constraint]) -> tuple[
+        list[GlobalContstraint], dict[str, list[ParamConstraint]]]:
+        param_constraints: dict[str, list[ParamConstraint]]
+        param_constraints = {}
 
-class CompilationError(Exception):
-    def __init__(self, compilable: str, library: str):
-        self.compilable = compilable
-        self.library = library
+        global_constraints: list[GlobalContstraint]
+        global_constraints = []
+        for constraint in constraints:
+            if isinstance(constraint, reference_parser.GlobalContstraint):
+                global_constraints.append(constraint)
+            elif isinstance(constraint, reference_parser.ParamConstraint):
+                param = param_constraints.get(constraint.var, [])
+                param.append(constraint)
 
-    def __str__(self):
-        return f"issue compiling {self.compilable} into {self.library}"
+                param_constraints[constraint.var] = param
+
+        return global_constraints, param_constraints
+
+    def satisfied(self, inputs: ParameterMapping) -> bool:
+        if not (self.constraints or any(parameter.constraints for parameter in self.parameters)):
+            return True
+
+        globals = (eval(constraint.predicate, inputs) for constraint in self.constraints)
+        parameter = (eval(f"{constraint.var} {constraint.op} {constraint.val}", inputs) for parameter in self.parameters for constraint in parameter.constraints)
+
+        return all(globals) and all(parameter)
 
 
 def compile_lib(path_to_compilable: str, lib_path: str):
@@ -403,3 +267,16 @@ def create_from(reference: FunctionReference, path_to_compilable: str, lib_path:
     compile_lib(path_to_compilable, lib_path)
 
     return Function(reference, lib_path)
+
+if __name__ == '__main__':
+    run = create("synthesis-eval/examples/str_len", lib_path="test.so")
+
+    for param in run.parameters:
+        print(param)
+
+    #vs = {"arr": list(range(10)), "n": 10}
+    vs = {"str": "klajflkjsdlkjfklajsdlkfjalksdfjklasjefd"}
+
+    print(run.run(vs))
+    for output in run.outputs():
+        print(output)
