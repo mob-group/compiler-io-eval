@@ -1,172 +1,131 @@
 import ctypes
-import math
 import os.path
+from dataclasses import dataclass
 from typing import *
 
 import lumberjack
+import randomiser
 import reference_parser
 import utilities
-from reference_parser import FunctionReference, CType, UnsupportedTypeError
-
-ScalarValue = Union[int, float, bool, str]
-ArrayValue = Union[str, list[ScalarValue]]
-SomeValue = Union[ScalarValue, ArrayValue]
-AnyValue = Union[SomeValue, None]
-
-ScalarCType = Union[ctypes.c_int, ctypes.c_float, ctypes.c_double, ctypes.c_char, ctypes.c_double]
+from helper_types import *
+from reference_parser import FunctionReference, ParamSize, Constraint, GlobalContstraint, \
+    ParamConstraint, CType
 
 
-class FunctionRunError(Exception):
-    pass
-
-
-class CArray:
-    """
-    A general type to store ctypes arrays, c_char_p, and string buffers
-    """
-    parameter = None
-    scalar_type = None
-    output = None
-
-    @classmethod
-    def from_param(cls, obj: ArrayValue):
-        """
-        Implementing the ctypes method
-
-        This method allows native Python arrays/strings to be converted into usable C ones
-        when a C function is called.
-        These types are registered in the functions :code:`argtypes` and the rest is handled automatically.
-
-        Since this is called automatically, and the C versions of objects are created here,
-        it is the only place where references to C objects can be stored.
-        They are only required for output parameters, so here they are registered to the parameter.
-
-        :param obj: the native Python value to convert
-        :return: the C version of that value
-        """
-        if cls.scalar_type == ctypes.c_char:
-            s = obj.encode("ASCII")
-
-            if cls.output:
-                raise UnsupportedTypeError("output strings")
-                # return ctypes.create_string_buffer(s)
-            else:
-                return ctypes.c_char_p(s)
-
-        try:
-            arr_type = cls.scalar_type * len(obj)
-        except Exception as e:
-            arr_type = cls.scalar_type.floating_type * len(obj)
-
-        val = arr_type(*obj)
-
-        if cls.output:
-            # TODO: edit this to use proper setter function
-            cls.parameter.set_value(val)
-
-        return val
-
-
-class Floating:
-    floating_type = None
-
-    def __init__(self, value: Union[ctypes.c_float, ctypes.c_double]):
-        self.value = value
-
-    def __eq__(self, other):
-        if self is other:
-            return True
-
-        if self.value == other.value:
-            return True
-
-        if math.isnan(self.value.value) and math.isnan(other.value.value):
-            # FIXME: change this back to True, this is just to help testing failures
-            return False
-
-        return False
-
-    @classmethod
-    def from_param(cls, obj: float):
-        return cls.floating_type(obj)
-
-
-class InvalidTypeError(Exception):
-    pass
-
-
+@dataclass
 class Parameter:
-    """
-    A wrapper for a parameter to a function
-    """
+    name: str
+    type: CType
+    is_output: bool
+    constraints: list[ParamConstraint]
 
-    def __init__(self, name: str, c_type: CType, is_output: bool):
-        self.name = name
-        self.is_output = is_output
-        self.output_val = None
+    size: Optional[ParamSize] = None
+    ref: Optional = None
 
-        if c_type.pointer_level == 0:
-            self.c_type = self.get_scalar_type(c_type.contents)
-        elif c_type.pointer_level == 1:
-            scalar_type = self.get_scalar_type(c_type.contents)
-            self.c_type = type(f"{c_type.contents.capitalize()}Array_{self.name}",
-                               (CArray,),
-                               {"scalar_type": scalar_type,
-                                "output": is_output,
-                                "parameter": self,
-                                })
+    def pack(self, value: SomeValue, length: Optional[int] = None):
+        assert self.type != CType("void", 0)
+        if self.type.contents == "char":
+            value = value.encode("ascii")
+
+        def scalar():
+            return self.primitive()(value)
+
+        def array():
+            return (self.primitive() * length)(*value)
+
+        def string():
+            if self.is_output:
+                return ctypes.create_string_buffer(value, length+1)
+            else:
+                sized = ctypes.c_char_p(b'0' * length)
+                sized.value = value
+
+                return sized
+
+        if self.type.pointer_level < 0 or self.type.pointer_level > 1:
+            raise UnsupportedTypeError("non-scalar/array")
+
+        if self.type.pointer_level == 0:
+            self.ref = scalar()
+        elif self.type.pointer_level == 1:
+            assert length is not None
+
+            if self.type.contents == "char":
+                self.ref = string()
+            else:
+                self.ref = array()
+
+        return self.ref
+
+    def unpack(self, foreign) -> AnyValue:
+        if self.type.contents == "void":
+            return None
+
+        if not self.is_array():
+            return foreign.value
+        elif self.type.contents == "char":
+            return foreign.value.decode()
         else:
-            raise UnsupportedTypeError("multi-level pointers")
+            return foreign[:]
+
+    def primitive(self):
+        prim = self.type.contents
+
+        if prim == "int":
+            return ctypes.c_int
+        elif prim == "float":
+            return ctypes.c_float
+        elif prim == "double":
+            return ctypes.c_double
+        elif prim == "char":
+            return ctypes.c_char
+        elif prim == "bool":
+            return ctypes.c_bool
+        else:
+            raise UnsupportedTypeError(prim)
+
+    def is_array(self) -> bool:
+        return self.type.pointer_level == 1
+
+    def get_size(self, value: Optional[ArrayValue], values: ParameterMapping) -> int:
+        def with_val():
+            size = self.size.evaluate(values, False)
+            if isinstance(self.size, reference_parser.ConstSize):
+                return len(value)
+            else:
+                assert size >= len(value)
+                return size
+
+        def without_val():
+            size = self.size.evaluate(values, True)
+            if isinstance(self.size, reference_parser.ConstSize) or isinstance(self.size, reference_parser.ExprSize):
+                return randomiser.Randomiser().random_int(max_val=size)
+            else:
+                return size
+
+        if value is None:
+            return without_val()
+        else:
+            return with_val()
 
     @property
-    def value(self) -> SomeValue:
-        """
-        Retrieves the value for this parameter
+    def value(self):
+        assert self.is_output and self.ref is not None
+        return self.unpack(self.ref)
 
-        Only works for output parameters, as this is designed to be used to grab the result value.
 
-        :return: the value of the parameter
-        """
-        assert self.is_output
+def get_parameters(parameters: list[reference_parser.CParameter],
+                   param_info: reference_parser.FunctionInfo,
+                   param_constraints: dict[str, list[Constraint]]):
 
-        try:
-            # value is a string
-            return self.output_val.value.decode()
-        except AttributeError:
-            # value is a normal array
-            return self.output_val[:]
+    def fill_parameter(parameter: reference_parser.CParameter):
+        return Parameter(parameter.name,
+                         parameter.type,
+                         param_info.is_output(parameter),
+                         param_constraints.get(parameter.name, []),
+                         size=param_info.size(parameter))
 
-    # for some reason the @value.setter wasn't working
-    def set_value(self, value: ctypes.Array):
-        """
-        Setter for the parameters value
-
-        :param value: the new value to keep
-        """
-        self.output_val = value
-
-    @staticmethod
-    def get_scalar_type(c_type_name: str):
-        """
-        Converts the name of a type into the corresponding ctypes class
-
-        :param c_type_name: the name of the C type
-        :return: the class that matches
-        """
-        if c_type_name == "int":
-            return ctypes.c_int
-        elif c_type_name == "float":
-            return type("CustomFloat", (Floating,), {"floating_type": ctypes.c_float})
-        elif c_type_name == "double":
-            return type("CustomDouble", (Floating,), {"floating_type": ctypes.c_double})
-        elif c_type_name == "char":
-            return ctypes.c_char
-        elif c_type_name == "bool":
-            return ctypes.c_bool
-        elif c_type_name == "void":
-            raise InvalidTypeError("check void types separately, there isn't a ctypes representation")
-        else:
-            raise UnsupportedTypeError(c_type_name)
+    return [fill_parameter(parameter) for parameter in parameters]
 
 
 class Function:
@@ -180,29 +139,43 @@ class Function:
 
         exe = getattr(ctypes.CDLL(lib_path), reference.name)
 
-        self.parameters = tuple(Parameter(param.name, param.type, reference.info.is_output(param))
-                                for param in reference.parameters())
+        self.name = reference.name
 
-        self.add_return_type(exe, reference.type)
-        exe.argtypes = (param.c_type for param in self.parameters)
+        self.constraints, param_constraints = self.split_constraints(reference.info.constraints)
+
+        self.parameters = get_parameters(reference.parameters, reference.info, param_constraints)
+
+        self.type = reference.type
+
+        # only works for scalar outputs
+        if reference.type == CType("void", 0):
+            exe.restype = None
+        else:
+            assert reference.type.pointer_level == 0
+            return_val = Parameter(f"{self.name}_return", reference.type, True, [])
+            exe.restype = return_val.primitive()
 
         self.exe = exe
 
-    def run(self, **params):
-        """
-        Run the function with the given parameters
+    def run(self, params: ParameterMapping):
+        def setup_arg(parameter: Parameter):
+            native_val = params[parameter.name]
 
-        :param params: parameter values, matching those given in the reference
-        :return: the return value of the function call
-        """
-        args = [params[param.name] for param in self.parameters]
+            size = parameter.get_size(native_val, params) if parameter.is_array() else None
+            foreign_val = parameter.pack(native_val, size)
+
+            parameter.ref = foreign_val
+
+            return foreign_val
+
+        args = [setup_arg(param) for param in self.parameters]
 
         try:
             return self.exe(*args)
-        except ctypes.ArgumentError:
-            raise FunctionRunError("could not build function types")
+        except Exception as e:
+            raise FunctionRunError(f"could not run function {self.name}")
 
-    def outputs(self):
+    def outputs(self) -> ParameterMapping:
         """
         Get the values of the output parameters
 
@@ -212,32 +185,39 @@ class Function:
         """
         return {param.name: param.value for param in self.parameters if param.is_output}
 
+    def safe_parameters(self) -> list[Parameter]:
+        scalars = [param for param in self.parameters if not param.is_array()]
+        arrays = [param for param in self.parameters if param.is_array()]
+
+        return scalars + arrays
+
     @staticmethod
-    def add_return_type(exe, ret_type: CType):
-        """
-        Specifies the return type of a C function
+    def split_constraints(constraints: list[reference_parser.Constraint]) -> tuple[
+        list[GlobalContstraint], dict[str, list[ParamConstraint]]]:
+        param_constraints: dict[str, list[ParamConstraint]]
+        param_constraints = {}
 
-        :param exe: the Function object to give a return type to
-        :param ret_type: the representation of its type
-        """
-        if ret_type.contents == "void":
-            exe.restype = None
-        elif ret_type.pointer_level == 0:
-            exe.restype = Parameter.get_scalar_type(ret_type.contents)
-        elif ret_type.pointer_level == 1:
-            exe.restype = ctypes.POINTER(Parameter.get_scalar_type(ret_type.contents))
-            raise UnsupportedTypeError("return pointers")
-        else:
-            raise UnsupportedTypeError("multi-level return pointers")
+        global_constraints: list[GlobalContstraint]
+        global_constraints = []
+        for constraint in constraints:
+            if isinstance(constraint, reference_parser.GlobalContstraint):
+                global_constraints.append(constraint)
+            elif isinstance(constraint, reference_parser.ParamConstraint):
+                param = param_constraints.get(constraint.var, [])
+                param.append(constraint)
 
+                param_constraints[constraint.var] = param
 
-class CompilationError(Exception):
-    def __init__(self, compilable: str, library: str):
-        self.compilable = compilable
-        self.library = compilable
+        return global_constraints, param_constraints
 
-    def __str__(self):
-        return f"issue compiling {self.compilable} into {self.library}"
+    def satisfied(self, inputs: ParameterMapping) -> bool:
+        if not (self.constraints or any(parameter.constraints for parameter in self.parameters)):
+            return True
+
+        globals = (eval(constraint.predicate, inputs) for constraint in self.constraints)
+        parameter = (eval(f"{constraint.var} {constraint.op} {constraint.val}", inputs) for parameter in self.parameters for constraint in parameter.constraints)
+
+        return all(globals) and all(parameter)
 
 
 def compile_lib(path_to_compilable: str, lib_path: str):
@@ -287,3 +267,16 @@ def create_from(reference: FunctionReference, path_to_compilable: str, lib_path:
     compile_lib(path_to_compilable, lib_path)
 
     return Function(reference, lib_path)
+
+if __name__ == '__main__':
+    run = create("synthesis-eval/examples/str_len", lib_path="test.so")
+
+    for param in run.parameters:
+        print(param)
+
+    #vs = {"arr": list(range(10)), "n": 10}
+    vs = {"str": "klajflkjsdlkjfklajsdlkfjalksdfjklasjefd"}
+
+    print(run.run(vs))
+    for output in run.outputs():
+        print(output)

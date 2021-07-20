@@ -5,14 +5,11 @@ from textwrap import indent, dedent
 from typing import *
 
 import lumberjack
-from evaluation import generate, Evaluator, Result
+from evaluation import generate, Evaluator, Result, write_examples
 from examples import ExampleInstance
-from reference_parser import load_reference, FunctionReference, ParseError, UnsupportedTypeError
+from reference_parser import load_reference, FunctionReference
 from runner import create_from, Function, CompilationError
-
-
-class InvalidImplementationError(Exception):
-    pass
+from helper_types import *
 
 
 ReferenceFile = tuple[FunctionReference, os.DirEntry]
@@ -58,9 +55,6 @@ def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
         if not (os.path.isfile(props) and os.path.isfile(ref_c)):
             continue
 
-        if "div" in ref.name:
-            continue
-
         if not (impls := implementations(impldir, ref.name, impl_exts)):
             continue
 
@@ -84,18 +78,15 @@ def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> 
             ref_impl = create_from(ref, os.path.join(ref_dir.path, "ref.c"))
 
             example_file = os.path.join(ref_dir.path, "examples")
-            examples = generate(ref, ref_impl, num_examples, example_file)
+            examples = generate(ref_impl, num_examples)
+            write_examples(ref, examples, example_file)
 
             impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
 
             if impls:
                 yield (ref, ref_dir), examples, impls
-        except ParseError:
-            continue
-        except CompilationError:
-            continue
-        except UnsupportedTypeError:
-            continue
+        except (ParseError, CompilationError, UnsupportedTypeError) as e:
+            lumberjack.getLogger("error").error(str(e))
 
 
 class ReferenceResult:
@@ -137,7 +128,8 @@ class ReferenceResult:
     @staticmethod
     def gen_report(results: list, verbose: bool, show_failures: bool = True, partitioned: bool = True) -> str:
         def stringify_many(items: Iterable) -> str:
-            assert verbose != False and show_failures == True  # just a meaningless use case
+            #assert verbose is not False and show_failures is not True  # just a meaningless use case
+            assert not (verbose and not show_failures)
 
             return "\n".join(item.full(show_failures) if verbose else str(item) for item in items)
 
@@ -186,7 +178,7 @@ def test_implementation(ref: FunctionReference, implementation: ImplementationFi
                         examples: list[ExampleInstance]) -> Result:
     impl, impl_file = implementation
 
-    evaluator = Evaluator(ref, impl)
+    evaluator = Evaluator(impl)
     result = evaluator.check(examples)
     result.name = impl_file.name
 
@@ -203,8 +195,12 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[Refere
     now = datetime.now()
 
     lumberjack.getLogger("general").info(f"testing beginning: {now.strftime('%d/%m/%Y %H:%M:%S')}")
-    return [test_reference(reference, impls, examples)
-            for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts)]
+
+    results = []
+    for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts):
+        results.append(test_reference(reference, impls, examples))
+
+    return results
 
 
 if __name__ == '__main__':

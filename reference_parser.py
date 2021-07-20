@@ -7,6 +7,7 @@ from sys import stderr
 from typing import *
 
 import lumberjack
+from helper_types import *
 
 
 class ParseIssue(Enum):
@@ -28,21 +29,8 @@ class ParseIssue(Enum):
     @staticmethod
     def ignorable():
         return {
-            ParseIssue.ArrayReturnType,
             ParseIssue.ScalarGivenSize,
         }
-
-
-class ParseError(Exception):
-    pass
-
-
-class UnsupportedTypeError(Exception):
-    def __init__(self, unsupported):
-        self.unsupported = unsupported
-
-    def __str__(self):
-        return f"attempted to use unsupported type: {self.unsupported}"
 
 
 @dataclass
@@ -84,6 +72,9 @@ class CType:
 
     def __str__(self):
         return f"{self.contents}{'*' * self.pointer_level}"
+
+    def with_ptr_level(self, ptr_level: int):
+        return CType(self.contents, ptr_level)
 
 
 @dataclass
@@ -167,74 +158,134 @@ class FunctionSignature:
 
 @dataclass
 class ParamSize:
-    """
-    Denotes an association between a array parameter, and a scalar parameter containing the array's size.
-    Additionally, for instance in strings, it can contain the way to derive the size of the array from
-    multiple parameters.
-    """
-    array: str
-    size: str
-    max: Optional[int] = None
+    arr: str
 
     @staticmethod
     def parse(size: str):
-        """
-        Build a ParamSize instance from a size description string.
+        size = size.lstrip()
 
-        These strings are in the form given in *props* files, e.g.
+        parts = re.finditer(r"\s*,\s*", size)
 
-        "size arr_name, scalar_name"
+        part = next(parts)
+        arr_end, next_start = part.span()
 
-        Also supports complex size format, e.g.
+        arr = size[:part.span()[0]]
+        try:
+            part = next(parts)
+            val_end, expr_start = part.span()
 
-        "size arr_name, max, { expr }"
+            val = int(size[next_start:val_end])
+            expr = size[expr_start:].rstrip()
 
-        Here *expr* is a Python expressions that can be evaluated,
-        and *max* is the maximum length of the **initial** value.
+            assert expr.startswith("{") and expr.endswith("}")
 
-        The value of the expression (val) is always used to specify the
-        size of the C array, even if val > max.
-        This is because max only caps the size of the initial value of
-        the array **in Python**, it is never passed through to C.
+            return ExprSize(arr, val, expr[1:-1])
+        except StopIteration:
+            try:
+                val = int(size[next_start:])
+                return ConstSize(arr, val)
+            except ValueError:
+                var = size[next_start:].rstrip()
 
-        :param size: the description
-        :return: the ParamSize instance
-        """
-        size = size.removeprefix("size").strip()
+                if var.startswith("{"):
+                    assert var.endswith("}")
 
-        split = size.index(",")
+                    return SimpleExprSize(arr, var[1:-1])
+                else:
+                    return VarSize(arr, var)
 
-        arr_name = size[:split].strip()
-        assert arr_name
+    def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
+        if isinstance(self, ExprSize):
+            if initial:
+                return self.init
+            else:
+                size = eval(self.expr, values)
+                assert size is not None and isinstance(size, int)
 
-        size = size[split + 1:].strip()
+                return size
+        elif isinstance(self, SimpleExprSize):
+            size = eval(self.expr, values)
+            assert size is not None and isinstance(size, int)
 
-        if "," not in size:
-            # simple format
-            return ParamSize(arr_name, size)
+            return size
+        elif isinstance(self, ConstSize):
+            return self.size
         else:
-            # in complex format
+            assert isinstance(self, VarSize)
 
-            # split again to find max and size
-            split = size.index(",")
+            var = self.var
+            assert var in values
 
-            arr_max = int(size[:split].strip())
-            arr_size = size[split + 1:].strip()
-
-            # check fields are valid
-            if not (arr_size.startswith("{") and arr_size.endswith("}")):
-                raise ParseError("invalid complex size expression given")
-
-            # remove braces from expr and check it is still non-empty
-            arr_size = arr_size[1:-1].strip()
-            if not arr_size:
-                raise ParseError("empty expression given in complex size")
-
-            return ParamSize(arr_name, arr_size, max=arr_max)
+            return values.get(var)
 
 
 @dataclass
-class FunctionArrayInfo:
+class VarSize(ParamSize):
+    """
+    Denotes an association between a array parameter, and a scalar parameter containing the array's size
+    """
+    arr: str
+    var: str
+
+
+@dataclass
+class ConstSize(ParamSize):
+    arr: str
+    size: int
+
+
+@dataclass
+class ExprSize(ParamSize):
+    arr: str
+    init: int
+    expr: str
+
+
+@dataclass
+class SimpleExprSize(ParamSize):
+    arr: str
+    expr: str
+
+
+class Constraint:
+    @staticmethod
+    def parse(constraint: str):
+        constraint = constraint.lstrip()
+
+        if constraint.startswith("{"):
+            constraint = constraint.rstrip()
+
+            assert constraint.endswith("}")
+
+            return GlobalContstraint(constraint[1:-1])
+        else:
+            word_boundary = constraint.index(" ")
+            var = constraint[:word_boundary]
+
+            constraint = constraint[word_boundary:].lstrip()
+
+            word_boundary = constraint.index(" ")
+            op, val = constraint[:word_boundary], constraint[word_boundary:].strip()
+
+            assert op in {">", "<", ">=", "<=", "==", "!="}
+
+            return ParamConstraint(var, op, val)
+
+
+@dataclass
+class ParamConstraint(Constraint):
+    var: str
+    op: str
+    val: str
+
+
+@dataclass
+class GlobalContstraint(Constraint):
+    predicate: str
+
+
+@dataclass
+class FunctionInfo:
     """
     A wrapper for additional information found in a function's *props* file.
 
@@ -242,39 +293,41 @@ class FunctionArrayInfo:
     """
     outputs: List[str]
     sizes: List[ParamSize]
+    constraints: List[Constraint]
 
     @staticmethod
-    def parse(outputs: list[str], sizes: list[str]):
+    def parse(info: List[str]):
         """
-        Build a FunctionArrayInfo instance from a list of description strings.
+        Build a FunctionInfo instance from a list of description strings.
         These strings may be describing either sizes or outputs.
 
 
         :param info: the description strings
         :return: the instance containing the information
         """
-        return FunctionArrayInfo(outputs, [ParamSize.parse(size) for size in sizes])
+        outputs = []
+        sizes = []
+        constraints = []
+
+        for line in info:
+            if line.startswith("output"):
+                outputs.append(line.removeprefix("output").strip())
+            elif line.startswith("size"):
+                size = ParamSize.parse(line.removeprefix("size").strip())
+                sizes.append(size)
+            elif line.startswith("constraint"):
+                constraint = Constraint.parse(line.removeprefix("constraint").strip())
+                constraints.append(constraint)
+            else:
+                raise ParseError(f"invalid directive in props: {line.strip()}")
+
+        return FunctionInfo(outputs, sizes, constraints)
 
     def is_output(self, param: CParameter) -> bool:
         return param.name in self.outputs
 
-    def size(self, param: CParameter) -> str:
-        return {size.array: size.size for size in self.sizes}.get(param.name)
-
-
-@dataclass
-class FunctionConstraints:
-    constraints: list[str]
-
-    def satisfied(self, **kwargs):
-        return all(eval(constraint) for constraint in self.constraints)
-
-    @staticmethod
-    def parse(constraints: list[str]):
-        def parse_single(constraint: str):
-            return constraint.strip().removeprefix("{").removesuffix("}")
-
-        return FunctionConstraints([parse_single(constraint) for constraint in constraints])
+    def size(self, param: CParameter) -> Optional[ParamSize]:
+        return {size.arr: size for size in self.sizes}.get(param.name)
 
 
 @dataclass
@@ -285,8 +338,7 @@ class FunctionProps:
     This includes the signature and any additional information about the parameters.
     """
     sig: FunctionSignature
-    arr_info: FunctionArrayInfo
-    constraints: FunctionConstraints
+    arr_info: FunctionInfo
 
     @staticmethod
     def parse(props_file: str):
@@ -298,23 +350,9 @@ class FunctionProps:
         """
         with open(props_file, "r") as props:
             sig = FunctionSignature.parse(props.readline())
-            rest = props.readlines()
+            rest = FunctionInfo.parse(props.readlines())
 
-        outputs = []
-        sizes = []
-        constraints = []
-
-        for line in rest:
-            if line.startswith("output"):
-                outputs.append(line.removeprefix("output").strip())
-            elif line.startswith("size"):
-                sizes.append(line.removeprefix("size").strip())
-            elif line.startswith("constrain"):
-                constraints.append(line.removeprefix("constrain").strip())
-            else:
-                raise ParseError("invalid directive in props")
-
-        return FunctionProps(sig, FunctionArrayInfo.parse(outputs, sizes), FunctionConstraints.parse(constraints))
+        return FunctionProps(sig, rest)
 
 
 @dataclass
@@ -362,33 +400,19 @@ class FunctionReference:
     Wrapper for all information about a given function.
     """
     signature: FunctionSignature
-    info: FunctionArrayInfo
-    constraints: FunctionConstraints
+    info: FunctionInfo
     reference: CReference
 
     @property
     def type(self):
         return self.signature.type
 
-    def parameters(self, safe_order=False) -> List[CParameter]:
-        if not safe_order:
-            return self.signature.parameters
-
-        sized = []
-        params = []
-        for parameter in self.signature.parameters:
-            if self.info.size(parameter) is None:
-                params.append(parameter)
-            else:
-                sized.append(parameter)
-
-        for parameter in sized:
-            params.append(parameter)
-
-        return params
+    @property
+    def parameters(self):
+        return self.signature.parameters
 
     def outputs(self):
-        return [parameter for parameter in self.parameters() if self.info.is_output(parameter)]
+        return [parameter for parameter in self.parameters if self.info.is_output(parameter)]
 
     @property
     def name(self):
@@ -408,12 +432,16 @@ class FunctionReference:
         :return: the instance built for that function
         """
         path = os.path.expanduser(prog_name)
-        props = FunctionProps.parse(os.path.join(path, "props"))
-        ref = CReference.parse(os.path.join(path, "ref.c"))
 
-        return FunctionReference(props.sig, props.arr_info, props.constraints, ref)
+        try:
+            props = FunctionProps.parse(os.path.join(path, "props"))
+            ref = CReference.parse(os.path.join(path, "ref.c"))
+        except ParseError as e:
+            raise ParseError(e.message, reference_name=os.path.split(prog_name)[1])
 
-    def issues(self) -> Set[ParseIssue]:
+        return FunctionReference(props.sig, props.arr_info, ref)
+
+    def issues(self, fix: bool = False) -> Set[ParseIssue]:
         """
         Check this FunctionReference for any issues.
 
@@ -428,7 +456,7 @@ class FunctionReference:
         param_dict = dict()
         array_params = set()
         scalar_params = set()
-        for param in self.parameters():
+        for param in self.parameters:
             name = param.name
             c_type = param.type
 
@@ -448,28 +476,46 @@ class FunctionReference:
 
         for output in self.info.outputs:
             if param_dict[output].pointer_level == 0:
-                issues.add(ParseIssue.ScalarOutputParameter)
+                if fix:
+                    self.info.outputs.remove(output)
+                else:
+                    issues.add(ParseIssue.ScalarOutputParameter)
 
         sized = set()
         for size in self.info.sizes:
-            array = size.array
-            var = size.size
+            array = size.arr
             sized.add(array)
 
             if array not in array_params:
-                issues.add(ParseIssue.ScalarGivenSize)
+                if fix:
+                    self.info.sizes.remove(size)
+                else:
+                    issues.add(ParseIssue.ScalarGivenSize)
 
-            if size.max is None and param_dict[var].contents not in {"int"}:
-                issues.add(ParseIssue.GivenInvalidSize)
+            if isinstance(size, VarSize):
+                var = size.var
+
+                if param_dict[var].contents not in {"int"}:
+                    issues.add(ParseIssue.GivenInvalidSize)
+            elif isinstance(size, ConstSize):
+                if size.size < 0:
+                    issues.add(ParseIssue.GivenInvalidSize)
+            elif isinstance(size, ExprSize):
+                if size.init < 0:
+                    issues.add(ParseIssue.GivenInvalidSize)
 
         for array in array_params - sized:
-            if param_dict[array].contents not in {"char"}:
+            if fix and param_dict[array] == CType("char", 1):
+                default_str_size = 100
+                self.info.sizes.append(ConstSize(array, default_str_size))
+            else:
                 issues.add(ParseIssue.UnsizedArrayParameter)
 
         code = self.code
         ref_signature = FunctionSignature.parse(code[:code.find("{")])
 
         if ref_signature != self.signature:
+            # try and fix here if possible
             issues.add(ParseIssue.ReferenceSignatureMismatch)
 
         return issues
@@ -479,7 +525,7 @@ class FunctionReference:
             ignorable = ParseIssue.ignorable()
 
         if issues - ignorable:
-            raise ParseError(f"parse of {self.name} contained issues")
+            raise ParseError("parse contained issues", reference_name=self.name)
 
     def show_issues(self, issues: set[ParseIssue], verbose: bool = False, ignore_good: bool = False) -> None:
         """
@@ -505,7 +551,7 @@ class FunctionReference:
         logger = lumberjack.getLogger("error")
         msg = f"{self.name} has issues: [{', '.join(issue.name for issue in issues)}]"
 
-        logger.warn(msg)
+        logger.warning(msg)
 
 
 def show_all(base_path: str) -> None:
@@ -539,7 +585,7 @@ def show_all(base_path: str) -> None:
             continue
 
         parsed = FunctionReference.parse(dir_path)
-        parsed.show_issues(ignore_good=True)
+        parsed.show_issues(parsed.issues(), ignore_good=True)
         print(parsed.signature.c_sig())
 
 
@@ -553,15 +599,17 @@ def show_single(path_to_ref: str) -> None:
     :param prog_name: the name of the function directory
     """
     contents = FunctionReference.parse(path_to_ref)
-    issues = contents.issues()
+    issues = contents.issues(fix=True)
 
-    print(dumps(asdict(contents), indent=4))
-    contents.show_issues(issues, verbose=True)
+    if issues:
+        contents.show_issues(issues, verbose=True)
+    else:
+        print(dumps(asdict(contents), indent=4))
 
 
 def load_reference(path_to_reference: str, log_issues: Callable = FunctionReference.log_issues) -> FunctionReference:
     func = FunctionReference.parse(path_to_reference)
-    issues = func.issues()
+    issues = func.issues(fix=True)
 
     log_issues(func, issues)
     func.validate(issues)
