@@ -25,6 +25,7 @@ class ParseIssue(Enum):
     UnsizedArrayParameter = "All unterminated arrays must be given a size"
     ReferenceSignatureMismatch = "The signatures in `ref.c' and `props' differ"
     InvalidIdentifierName = "All names must be valid C identifiers"
+    InvalidConstraint = "A forbidden constraint was given"
 
     @staticmethod
     def ignorable():
@@ -473,6 +474,13 @@ class FunctionReference:
             m = re.match(r"^[a-zA-Z_]\w*$", name, flags=re.ASCII)
             if not m or m[0] != name:
                 issues.add(ParseIssue.InvalidIdentifierName)
+
+        for constraint in self.info.constraints:
+            if not isinstance(constraint, ParamConstraint):
+                continue
+
+            if (constraint.var in array_params or param_dict[constraint.var].contents == "char") and constraint.op not in {"==", "!="}:
+                issues.add(ParseIssue.InvalidConstraint)
 
         for output in self.info.outputs:
             if param_dict[output].pointer_level == 0:

@@ -47,3 +47,7 @@ class UnsupportedTypeError(Exception):
 
     def __str__(self):
         return f"attempted to use unsupported type: {self.unsupported}"
+
+
+class ConstraintError(Exception):
+    pass

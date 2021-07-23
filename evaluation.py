@@ -92,18 +92,29 @@ class Generator:
         :return: the new parameter value
         """
 
+        max_val = None
+        min_val = None
+
+        for constraint in parameter.constraints:
+            if constraint.op in {"<", "<="}:
+                if max_val is None or max_val < constraint.val:
+                    max_val == constraint.val
+            elif constraint.op in {">", ">="}:
+                if min_val is None or min_val > constraint.val:
+                    min_val == constraint.val
+
         primitive = parameter.type.contents
         # TODO: use paramter constraints to select from valid range
         # add in any range changes here
         # NOTE: that's why they're all funcs
         if primitive == "int":
             def gen():
-                return self.randomiser.random_int()
+                return self.randomiser.random_int(min_val=min_val, max_val=max_val)
         elif primitive == "float":
             def gen():
-                return self.randomiser.random_float()
+                return self.randomiser.random_float(min_val=min_val, max_val=max_val)
         elif primitive == "double":
-            def gen():
+            def gen(min_val=min_val, max_val=max_val):
                 return self.randomiser.random_double()
         elif primitive == "char":
             def gen():
