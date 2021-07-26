@@ -8,7 +8,7 @@ import utilities
 from examples import ExampleInstance, parse, form
 from randomiser import Randomiser
 from reference_parser import load_reference, FunctionReference
-from runner import Function, create, create_from, FunctionRunError, Parameter
+from runner import Function, create, create_from, FunctionRunError, Parameter, run_safe
 from helper_types import *
 
 
@@ -21,10 +21,11 @@ class Generator:
     and then retrieves the output produced by that code.
     """
 
-    def __init__(self, runner: Function):
+    def __init__(self, reference: FunctionReference, runner: Function):
+        self.reference = reference
         self.runner = runner
 
-        random_seed = 0  # change to `None' outside of testing
+        random_seed = None  # non-random seed doesn't play nicely with processes
         self.randomiser = Randomiser(seed=random_seed)
 
     def generate(self, n: int) -> list[ExampleInstance]:
@@ -74,9 +75,7 @@ class Generator:
         if not self.runner.satisfied(inputs):
             return None
 
-        value = self.runner.run(inputs)
-
-        outputs = self.runner.outputs()
+        value, outputs = run_safe(self.reference, self.runner.lib_path, inputs)
 
         return ExampleInstance(inputs, value, outputs)
 
@@ -131,9 +130,8 @@ class Generator:
             size = parameter.get_size(None, current)
 
             val = self.randomiser.random_array(size, gen)
-            return val if primitive != "char" else ''.join(val)
+            val = val if primitive != "char" else ''.join(val)
 
-        current[parameter.name] = val
         return val
 
 
@@ -188,7 +186,8 @@ class Evaluator:
     Evaluates functions on examples
     """
 
-    def __init__(self, runner: Function):
+    def __init__(self, reference: FunctionReference, runner: Function):
+        self.reference = reference
         self.runner = runner
 
     @staticmethod
@@ -236,10 +235,8 @@ class Evaluator:
             except TypeError:
                 return False
 
-        value = self.runner.run(example.inputs)
-
+        value, actual = run_safe(self.reference, self.runner.lib_path, example.inputs)
         expected = example.outputs
-        actual = self.runner.outputs()
 
         fail = Failure(example, value, actual)
 
@@ -291,7 +288,7 @@ def evaluate(run: Function, ex_file: str) -> Result:
     return result
 
 
-def generate(run: Function, n: int) -> list[ExampleInstance]:
+def generate(ref: FunctionReference, run: Function, n: int) -> list[ExampleInstance]:
     """
     Helper method to produce examples to check against a function
 
@@ -301,7 +298,7 @@ def generate(run: Function, n: int) -> list[ExampleInstance]:
     :param ex_file: the file to save the examples into, if :code:`None` then don't write anywhere
     :return: the examples produced
     """
-    g = Generator(run)
+    g = Generator(ref, run)
     examples = g.generate(n)
 
     return examples

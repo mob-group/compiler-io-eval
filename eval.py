@@ -78,7 +78,7 @@ def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> 
             ref_impl = create_from(ref, os.path.join(ref_dir.path, "ref.c"))
 
             example_file = os.path.join(ref_dir.path, "examples")
-            examples = generate(ref_impl, num_examples)
+            examples = generate(ref, ref_impl, num_examples)
             write_examples(ref, examples, example_file)
 
             impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
@@ -178,7 +178,7 @@ def test_implementation(ref: FunctionReference, implementation: ImplementationFi
                         examples: list[ExampleInstance]) -> Result:
     impl, impl_file = implementation
 
-    evaluator = Evaluator(impl)
+    evaluator = Evaluator(ref, impl)
     result = evaluator.check(examples)
     result.name = impl_file.name
 
@@ -212,5 +212,5 @@ if __name__ == '__main__':
 
     args = argparser.parse_args()
 
-    results = test(args.references, args.implementations, 50, impl_exts={".c"})
+    results = test(args.references, args.implementations, 1, impl_exts={".c"})
     print(ReferenceResult.gen_report(results, True, partitioned=True))

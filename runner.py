@@ -1,6 +1,8 @@
 import ctypes
-import os.path
+import os
+import sys
 from dataclasses import dataclass
+from multiprocessing import Pool, Value, Queue, Process
 from typing import *
 
 import lumberjack
@@ -140,6 +142,7 @@ class Function:
         exe = getattr(ctypes.CDLL(lib_path), reference.name)
 
         self.name = reference.name
+        self.lib_path = lib_path
 
         self.constraints, param_constraints = self.split_constraints(reference.info.constraints)
 
@@ -156,6 +159,12 @@ class Function:
             exe.restype = return_val.primitive()
 
         self.exe = exe
+
+    def run_safe(self, params: ParameterMapping):
+        with Pool(processes=1) as pool:
+            val = pool.apply(self.run, (params))
+            print(val)
+
 
     def run(self, params: ParameterMapping):
         def setup_arg(parameter: Parameter):
@@ -214,8 +223,8 @@ class Function:
         if not (self.constraints or any(parameter.constraints for parameter in self.parameters)):
             return True
 
-        globals = (eval(constraint.predicate, inputs) for constraint in self.constraints)
-        parameter = (eval(f"{constraint.var} {constraint.op} {constraint.val}", inputs) for parameter in self.parameters for constraint in parameter.constraints)
+        globals = (eval(constraint.predicate, dict(inputs)) for constraint in self.constraints)
+        parameter = (eval(f"{constraint.var} {constraint.op} {constraint.val}", dict(inputs)) for parameter in self.parameters for constraint in parameter.constraints)
 
         return all(globals) and all(parameter)
 
@@ -268,6 +277,28 @@ def create_from(reference: FunctionReference, path_to_compilable: str, lib_path:
 
     return Function(reference, lib_path)
 
+def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping, queue: Optional[Queue] = None):
+    func = Function(reference, path_to_lib)
+
+    val = func.run(inputs)
+    outputs = func.outputs()
+
+    queue.put((val, outputs))
+
+def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping) -> Optional[tuple[AnyValue, ParameterMapping]]:
+    q = Queue()
+
+    p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q))
+    print("going with: ", inputs)
+    p.start()
+    p.join()
+
+    if p.exitcode == 0:
+        return q.get_nowait()
+    else:
+        return None
+
+'''
 if __name__ == '__main__':
     run = create("synthesis-eval/examples/str_len", lib_path="test.so")
 
@@ -277,6 +308,27 @@ if __name__ == '__main__':
     #vs = {"arr": list(range(10)), "n": 10}
     vs = {"str": "klajflkjsdlkjfklajsdlkfjalksdfjklasjefd"}
 
-    print(run.run(vs))
+    print(run.run_safe(vs))
     for output in run.outputs():
         print(output)
+'''
+
+if __name__ == '__main__':
+    ref_name = "synthesis-eval/examples/str_cat"
+    ref = reference_parser.load_reference(ref_name)
+    inputs = {"src": "aaaaa", "out": "bbbbb"}
+
+    #run = create_from(ref, f"{ref_name}/ref.c", "test.so")
+    run = create_from(ref, "str_cat.c", "str_cat.so")
+
+    for _ in range(10):
+        resp = run_safe(ref, run.lib_path, inputs)
+        if resp is None:
+            print("nothing came back")
+            continue
+
+        val, outputs = resp
+        print(val)
+        print("========")
+        for name, output in outputs.items():
+            print(f"{name}: {output}")

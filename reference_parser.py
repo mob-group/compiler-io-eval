@@ -200,12 +200,12 @@ class ParamSize:
             if initial:
                 return self.init
             else:
-                size = eval(self.expr, values)
+                size = eval(self.expr, dict(values))
                 assert size is not None and isinstance(size, int)
 
                 return size
         elif isinstance(self, SimpleExprSize):
-            size = eval(self.expr, values)
+            size = eval(self.expr, dict(values))
             assert size is not None and isinstance(size, int)
 
             return size
