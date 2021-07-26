@@ -64,9 +64,10 @@ def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
 def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry) -> Function:
     try:
         return create_from(reference, path_to_implementation.path)
-    except CompilationError:
-        setup_impl(path_to_implementation)
-        return create_from(reference, path_to_implementation.path)
+    except CompilationError as e:
+        lumberjack.getLogger("error").error(str(e))
+        #setup_impl(path_to_implementation)
+        #return create_from(reference, path_to_implementation.path)
 
 
 def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> Generator[

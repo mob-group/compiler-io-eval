@@ -240,8 +240,9 @@ def compile_lib(path_to_compilable: str, lib_path: str):
     :param path_to_compilable: a function to compile, can be .c or .s
     :param lib_path: the .so file to compile into
     """
+    linker_flag = "soname" if sys.platform == "linux" else "install_name"
     stdout, stderr = utilities.run_command(
-        f"gcc -Wall -O0 -shared -fPIC -Wl,-install_name,{lib_path} -o {lib_path} {path_to_compilable}")
+        f"gcc -Wall -O0 -shared -fPIC -Wl,-{linker_flag},{lib_path} -o {lib_path} {path_to_compilable}")
 
     if stderr:
         lumberjack.getLogger("error").error(stderr)
