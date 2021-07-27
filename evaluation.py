@@ -74,9 +74,12 @@ class Generator:
 
         if not self.runner.satisfied(inputs):
             return None
+        
+        results = run_safe(self.reference, self.runner.lib_path, inputs)
+        if results is None:
+            raise FunctionRunError(f"could not produce value from {self.reference.name}")
 
-        value, outputs = run_safe(self.reference, self.runner.lib_path, inputs)
-
+        value, outputs = results
         return ExampleInstance(inputs, value, outputs)
 
     def random(self, parameter: Parameter, current: ParameterMapping) -> SomeValue:
@@ -235,7 +238,12 @@ class Evaluator:
             except TypeError:
                 return False
 
-        value, actual = run_safe(self.reference, self.runner.lib_path, example.inputs)
+        result = run_safe(self.reference, self.runner.lib_path, example.inputs)
+
+        if result is None:
+            raise FunctionRunError(f"no value produced by {self.reference.name}")
+
+        value, actual = result
         expected = example.outputs
 
         fail = Failure(example, value, actual)

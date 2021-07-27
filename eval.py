@@ -17,8 +17,6 @@ ImplementationFile = tuple[Function, os.DirEntry]
 
 
 def setup_impl(impl: os.DirEntry):
-    backup_ext = ".bak"
-
     with open(impl, "r") as orig:
         contents = orig.read()
 
@@ -26,20 +24,24 @@ def setup_impl(impl: os.DirEntry):
         raise InvalidImplementationError("could not find a function label")
 
     func = m[1]
-    assert impl.name.startswith(func)
+    if not impl.name.startswith(func):
+        lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
 
-    with open(impl, "w") as new:
-        new.write(f".globl {func}\n{contents}")
+    if not os.path.exists(tmp_dir):
+        os.makedirs(tmp_dir)
 
-    with open(f"{impl}{backup_ext}", "w") as backup:
-        backup.write(contents)
+    tmp_impl = os.path.join(tmp_dir, impl.name)
+    with open(tmp_impl, "w") as new:
+        new.write(f".global {func}\n{contents}")
+
+    return tmp_impl
 
 
 def implementations(basedir: str, impl: str, exts: set[str]) -> list[os.DirEntry]:
     d = os.path.join(basedir, impl)
     try:
         f: os.DirEntry
-        return [f for f in os.scandir(d) if os.path.splitext(f.name)[1] in exts]
+        return [f for f in sorted(os.scandir(d), key=lambda x: (x.is_file(), x.name)) if os.path.splitext(f.name)[1] in exts]
     except FileNotFoundError:
         return []
     except NotADirectoryError:
@@ -62,12 +64,24 @@ def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
 
 
 def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry) -> Function:
+    lib_name, _ = os.path.splitext(os.path.basename(path_to_implementation))
+    lib_path = os.path.join(tmp_dir, f"{lib_name}.so")
+    print(lib_path)
     try:
-        return create_from(reference, path_to_implementation.path)
-    except CompilationError as e:
-        lumberjack.getLogger("error").error(str(e))
-        #setup_impl(path_to_implementation)
-        #return create_from(reference, path_to_implementation.path)
+        return create_from(reference, path_to_implementation.path, lib_path=lib_path)
+    except (CompilationError, AttributeError) as e:
+        lumberjack.getLogger("error").error(f"raw file: {str(e)}")
+
+    try:
+        new_path = setup_impl(path_to_implementation)
+        print("getting new", new_path)
+        print(reference.name, new_path, lib_path)
+        # for some reason it breaks if the retry compiles into the same file
+        return create_from(reference, new_path, lib_path=lib_path[:-3]+"-retry.so")
+    except (CompilationError, AttributeError) as e:
+        lumberjack.getLogger("error").error(f"backup file: {str(e)}")
+
+    return None
 
 
 def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> Generator[
@@ -81,13 +95,29 @@ def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> 
             example_file = os.path.join(ref_dir.path, "examples")
             examples = generate(ref, ref_impl, num_examples)
             write_examples(ref, examples, example_file)
-
-            impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
-
-            if impls:
-                yield (ref, ref_dir), examples, impls
-        except (ParseError, CompilationError, UnsupportedTypeError) as e:
+        except Exception as e:
             lumberjack.getLogger("error").error(str(e))
+            print(e)
+            continue
+
+        impls = []
+        for impl_file in impl_files:
+            try:
+                impl = load_implementation(ref, impl_file)
+
+                if impl is None:
+                    print("nothing found")
+                    continue
+                impls.append((impl, impl_file))
+                #impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
+            except (AttributeError, CompilationError, UnsupportedTypeError) as e:
+                print("uh oh----------------")
+                lumberjack.getLogger("error").error(str(e))
+        print(f"impls: {len(impls)}")
+        if impls:
+            yield (ref, ref_dir), examples, impls
+        else:
+            lumberjack.getLogger("error").warning(f"no valid implementations in {impldir}")
 
 
 class ReferenceResult:
@@ -199,7 +229,10 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[Refere
 
     results = []
     for reference, examples, impls in fetch(refdir, impldir, num_examples, impl_exts):
-        results.append(test_reference(reference, impls, examples))
+        try:
+            results.append(test_reference(reference, impls, examples))
+        except Exception as e:
+            lumberjack.getLogger("error").error(str(e))
 
     return results
 
@@ -213,5 +246,5 @@ if __name__ == '__main__':
 
     args = argparser.parse_args()
 
-    results = test(args.references, args.implementations, 1, impl_exts={".c"})
+    results = test(args.references, args.implementations, 1, impl_exts={".s"})
     print(ReferenceResult.gen_report(results, True, partitioned=True))

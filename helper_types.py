@@ -1,5 +1,11 @@
 from typing import Union, NewType, Callable, Optional
 
+# HELPFUL CONSTANTS
+
+tmp_dir = "_tmp"
+
+# REGULAR TYPES
+
 ScalarValue = Union[int, float, bool, str]
 ArrayValue = Union[str, list[ScalarValue]]
 SomeValue = Union[ScalarValue, ArrayValue]

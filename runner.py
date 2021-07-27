@@ -139,7 +139,8 @@ class Function:
         if not (lib_path.startswith("./") or lib_path.startswith("/")):
             lib_path = f"./{lib_path}"
 
-        exe = getattr(ctypes.CDLL(lib_path), reference.name)
+        lib = ctypes.CDLL(lib_path)
+        exe = getattr(lib, reference.name)
 
         self.name = reference.name
         self.lib_path = lib_path
@@ -241,8 +242,9 @@ def compile_lib(path_to_compilable: str, lib_path: str):
     :param lib_path: the .so file to compile into
     """
     linker_flag = "soname" if sys.platform == "linux" else "install_name"
-    stdout, stderr = utilities.run_command(
-        f"gcc -Wall -O0 -shared -fPIC -Wl,-{linker_flag},{lib_path} -o {lib_path} {path_to_compilable}")
+    cmd = f"gcc -Wall -O0 -shared -fPIC -o {lib_path} {path_to_compilable}"
+    stdout, stderr = utilities.run_command(cmd)
+        
 
     if stderr:
         lumberjack.getLogger("error").error(stderr)
@@ -270,8 +272,8 @@ def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str
 
 def create_from(reference: FunctionReference, path_to_compilable: str, lib_path: str = None) -> Function:
     if lib_path is None:
-        if not os.path.exists("_tmp"):
-            os.makedirs("_tmp")
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
         lib_path = os.path.join("_tmp", f"{utilities.get_tmp_path()}.so")
 
     compile_lib(path_to_compilable, lib_path)
@@ -290,13 +292,13 @@ def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMa
     q = Queue()
 
     p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q))
-    print("going with: ", inputs)
     p.start()
     p.join()
 
     if p.exitcode == 0:
         return q.get_nowait()
     else:
+        lumberjack.getLogger("error").warning(f"{path_to_lib} failed on an input")
         return None
 
 '''
