@@ -293,11 +293,14 @@ def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMa
 
     p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q))
     p.start()
-    p.join()
+    timeout = 2 #num. of seconds to wait
+    p.join(timeout)
 
     if p.exitcode == 0:
+        p.close()
         return q.get_nowait()
     else:
+        p.close()
         lumberjack.getLogger("error").warning(f"{path_to_lib} failed on an input")
         return None
 

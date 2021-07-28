@@ -66,7 +66,6 @@ def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
 def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry) -> Function:
     lib_name, _ = os.path.splitext(os.path.basename(path_to_implementation))
     lib_path = os.path.join(tmp_dir, f"{lib_name}.so")
-    print(lib_path)
     try:
         return create_from(reference, path_to_implementation.path, lib_path=lib_path)
     except (CompilationError, AttributeError) as e:
@@ -74,8 +73,6 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
 
     try:
         new_path = setup_impl(path_to_implementation)
-        print("getting new", new_path)
-        print(reference.name, new_path, lib_path)
         # for some reason it breaks if the retry compiles into the same file
         return create_from(reference, new_path, lib_path=lib_path[:-3]+"-retry.so")
     except (CompilationError, AttributeError) as e:
@@ -106,7 +103,6 @@ def fetch(refdir: str, impldir: str, num_examples: int, impl_exts: set[str]) -> 
                 impl = load_implementation(ref, impl_file)
 
                 if impl is None:
-                    print("nothing found")
                     continue
                 impls.append((impl, impl_file))
                 #impls = [(load_implementation(ref, impl_file), impl_file) for impl_file in impl_files]
