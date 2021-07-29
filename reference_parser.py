@@ -74,9 +74,6 @@ class CType:
     def __str__(self):
         return f"{self.contents}{'*' * self.pointer_level}"
 
-    def with_ptr_level(self, ptr_level: int):
-        return CType(self.contents, ptr_level)
-
 
 @dataclass
 class CParameter:
@@ -159,10 +156,20 @@ class FunctionSignature:
 
 @dataclass
 class ParamSize:
+    """
+    The base type for sizes of array parameters
+    """
     arr: str
 
     @staticmethod
     def parse(size: str):
+        """
+        Parses a size description into the correct subclass for the size
+
+        TODO: change this to something better, fails on (the comma in) inputs like "size x, { sum(x*y for x, y in zip(..)) }
+        :param size: the size description
+        :return: the actual size object built from that description
+        """
         size = size.lstrip()
 
         parts = re.finditer(r"\s*,\s*", size)
@@ -196,28 +203,19 @@ class ParamSize:
                     return VarSize(arr, var)
 
     def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
-        if isinstance(self, ExprSize):
-            if initial:
-                return self.init
-            else:
-                size = eval(self.expr, dict(values))
-                assert size is not None and isinstance(size, int)
+        """
+        Determine the actual size of the array
 
-                return size
-        elif isinstance(self, SimpleExprSize):
-            size = eval(self.expr, dict(values))
-            assert size is not None and isinstance(size, int)
+        This method can be used to calculate the size of the initial native Python value being fed into a function,
+        as well as the size a foreign array needs to be to contain a value it will later hold.
+        Note this does *NOT* include the extra space needed for a '\0' in a string.
 
-            return size
-        elif isinstance(self, ConstSize):
-            return self.size
-        else:
-            assert isinstance(self, VarSize)
-
-            var = self.var
-            assert var in values
-
-            return values.get(var)
+        :param values: the values already determined for the parameters
+        :param initial: set to :code:`True` for the size of the native value,
+        otherwise the size is for the foreign array.
+        :return: the size of the array
+        """
+        raise NotImplementedError("This is an abstract method, use the corresponding method in a subtype")
 
 
 @dataclass
@@ -228,29 +226,81 @@ class VarSize(ParamSize):
     arr: str
     var: str
 
+    def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
+        var = self.var
+        assert var in values
+
+        return values.get(var)
+
 
 @dataclass
 class ConstSize(ParamSize):
+    """
+    Denotes a constant size on an array parameter
+
+    Note this constant can also be treated as a *maximum* size.
+    """
     arr: str
     size: int
+
+    def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
+        return self.size
 
 
 @dataclass
 class ExprSize(ParamSize):
+    """
+    Denotes a complex sizing scheme, typically used for output strings
+
+    Contains the size for the initial size of the array (for generation),
+    and an expression to calculate the maximum size the array can be (to create a foreign array large enough).
+    """
     arr: str
     init: int
     expr: str
 
+    def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
+        if initial:
+            return self.init
+        else:
+            size = eval(self.expr, dict(values))
+            assert size is not None and isinstance(size, int)
+
+            return size
+
 
 @dataclass
 class SimpleExprSize(ParamSize):
+    """
+    Denotes an array size calculated from an expression
+
+    This is useful to encode a more complicated relationship between parameters,
+    for example in matrices where the size of an m x n array M needs to be { m * n }
+    """
     arr: str
     expr: str
 
+    def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
+        size = eval(self.expr, dict(values))
+        assert size is not None and isinstance(size, int)
+
+        return size
+
 
 class Constraint:
+    """
+    Base class for a constraint property
+    """
+
     @staticmethod
     def parse(constraint: str):
+        """
+        Extracts a constraint from a description of a constraint,
+        determining the type of constraint and embedding it in an object of the corresponding subclass
+
+        :param constraint: the constraint description
+        :return: the constraint object
+        """
         constraint = constraint.lstrip()
 
         if constraint.startswith("{"):
@@ -272,17 +322,47 @@ class Constraint:
 
             return ParamConstraint(var, op, val)
 
+    def satisfied(self, inputs: ParameterMapping) -> bool:
+        """
+        Determines if a constraint is met by a particular instance of inputs
+
+        :param inputs: the parameters to check
+        :return: whether or not these inputs satisfy the constraint
+        """
+        raise NotImplementedError("This is an abstract method, use the corresponding method in a subtype")
+
 
 @dataclass
 class ParamConstraint(Constraint):
+    """
+    A constraint on a single parameter
+    """
     var: str
     op: str
     val: str
 
+    def satisfied(self, inputs: ParameterMapping) -> bool:
+        return eval(f"{self.var} {self.op} {self.val}", dict(inputs))
+
+    @property
+    def value(self) -> SomeValue:
+        """
+        Evaluates the value of the constraint
+
+        :return: the value in the constraint
+        """
+        return eval(self.val)
+
 
 @dataclass
 class GlobalContstraint(Constraint):
+    """
+    A general constraint on any number of parameters
+    """
     predicate: str
+
+    def satisfied(self, inputs: ParameterMapping) -> bool:
+        return eval(self.predicate, dict(inputs))
 
 
 @dataclass
@@ -446,6 +526,7 @@ class FunctionReference:
         """
         Check this FunctionReference for any issues.
 
+        :param fix: set to :code:`True` to try and fix any issues that are encountered
         :return: all issues found in the function
         """
         issues = set()
@@ -479,7 +560,8 @@ class FunctionReference:
             if not isinstance(constraint, ParamConstraint):
                 continue
 
-            if (constraint.var in array_params or param_dict[constraint.var].contents == "char") and constraint.op not in {"==", "!="}:
+            if (constraint.var in array_params or param_dict[
+                constraint.var].contents == "char") and constraint.op not in {"==", "!="}:
                 issues.add(ParseIssue.InvalidConstraint)
 
         for output in self.info.outputs:
@@ -539,6 +621,7 @@ class FunctionReference:
         """
         Write any issues in the function to stderr
 
+        :param issues: issues to show
         :param verbose: set to :code:`True` to include a full breakdown of any issues found
         :param ignore_good: set to :code:`True` to write to stderr even if no issues are found
         """
@@ -552,7 +635,12 @@ class FunctionReference:
         elif not ignore_good:
             print(f"{self.name} is good", file=stderr)
 
-    def log_issues(self, issues: set[ParseIssue]) -> None:
+    def log_issues(self, issues: set[ParseIssue]):
+        """
+        Write any issues found to the error log
+
+        :param issues: any issues found
+        """
         if not issues:
             return
 
@@ -597,14 +685,13 @@ def show_all(base_path: str) -> None:
         print(parsed.signature.c_sig())
 
 
-def show_single(path_to_ref: str) -> None:
+def show_single(path_to_ref: str):
     """
     Parse and display the signature for a single program.
 
     Signature is given in functional form, and the full information is given if issues are found.
 
-    :param base_path: the full path to the directory containing a function
-    :param prog_name: the name of the function directory
+    :param path_to_ref: the reference directory
     """
     contents = FunctionReference.parse(path_to_ref)
     issues = contents.issues(fix=True)
@@ -616,6 +703,15 @@ def show_single(path_to_ref: str) -> None:
 
 
 def load_reference(path_to_reference: str, log_issues: Callable = FunctionReference.log_issues) -> FunctionReference:
+    """
+    Creates a reference from a reference directory
+
+    This will check the reference is valid, and will fail if the reference is not.
+
+    :param path_to_reference: the reference directory
+    :param log_issues: the method used to log any issues
+    :return: the reference built from that directory
+    """
     func = FunctionReference.parse(path_to_reference)
     issues = func.issues(fix=True)
 

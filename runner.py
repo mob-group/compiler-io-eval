@@ -2,8 +2,7 @@ import ctypes
 import os
 import sys
 from dataclasses import dataclass
-from multiprocessing import Pool, Value, Queue, Process
-from typing import *
+from multiprocessing import Queue, Process
 
 import lumberjack
 import randomiser
@@ -16,7 +15,12 @@ from reference_parser import FunctionReference, ParamSize, Constraint, GlobalCon
 
 @dataclass
 class Parameter:
-    name: str
+    """
+    A C function parameter
+
+    Brings together all information about the parameter, which is spread out across a FunctionReference
+    """
+    name: Name
     type: CType
     is_output: bool
     constraints: list[ParamConstraint]
@@ -25,6 +29,16 @@ class Parameter:
     ref: Optional = None
 
     def pack(self, value: SomeValue, length: Optional[int] = None):
+        """
+        Create a foreign value that can be passed as this parameter
+
+        Uses the parameter information to determine how to convert it.
+
+        :param value: the native value to convert
+        :param length: if present this is used to determine the size of a foreign array,
+        otherwise the length of the value is used (only for array parameters).
+        :return: the foreign value that has been created
+        """
         assert self.type != CType("void", 0)
         if self.type.contents == "char":
             value = value.encode("ascii")
@@ -37,7 +51,7 @@ class Parameter:
 
         def string():
             if self.is_output:
-                return ctypes.create_string_buffer(value, length+1)
+                return ctypes.create_string_buffer(value, length + 1)
             else:
                 sized = ctypes.c_char_p(b'0' * length)
                 sized.value = value
@@ -60,6 +74,14 @@ class Parameter:
         return self.ref
 
     def unpack(self, foreign) -> AnyValue:
+        """
+        Converts a foreign value into a native value
+
+        Uses the parameter information to determine how to convert it.
+
+        :param foreign: the foreign value
+        :return: the native value
+        """
         if self.type.contents == "void":
             return None
 
@@ -71,6 +93,11 @@ class Parameter:
             return foreign[:]
 
     def primitive(self):
+        """
+        Maps type descriptions to their corresponding ctypes representations
+
+        :return: the ctypes class for the current parameters primitive type
+        """
         prim = self.type.contents
 
         if prim == "int":
@@ -90,6 +117,18 @@ class Parameter:
         return self.type.pointer_level == 1
 
     def get_size(self, value: Optional[ArrayValue], values: ParameterMapping) -> int:
+        """
+        Retrieve the size for the current (array) parameter
+
+        Can be used to determine the size of the initial (native value) array,
+        or the final (foreign) array.
+
+        :param value: passing a list here means the initial array has been generated,
+        so the size of the final array is returned.
+        :param values: mapping of currently generated parameter values
+        :return: the size of the array
+        """
+
         def with_val():
             size = self.size.evaluate(values, False)
             if isinstance(self.size, reference_parser.ConstSize):
@@ -112,22 +151,40 @@ class Parameter:
 
     @property
     def value(self):
+        """
+        Gives the native value that this parameter currently holds
+
+        Parameters contain a reference to a foreign object, stored whenever the parameter packs a new value.
+        As this reference points to the underlying object it can be used to check a value after the function has run,
+        if the function modified the value at all in the process this is shown in the reference.
+        This function is just a convenient way to check the value of an output value as a native object.
+
+        :return: the value of the reference stored in the parameter
+        """
         assert self.is_output and self.ref is not None
         return self.unpack(self.ref)
 
+    @staticmethod
+    def get(parameters: list[reference_parser.CParameter],
+            param_info: reference_parser.FunctionInfo,
+            param_constraints: dict[str, list[Constraint]]):
+        """
+        Builds a list of parameters
 
-def get_parameters(parameters: list[reference_parser.CParameter],
-                   param_info: reference_parser.FunctionInfo,
-                   param_constraints: dict[str, list[Constraint]]):
+        :param parameters: the parameters as parsed from the reference
+        :param param_info: the extra info parsed from the reference
+        :param param_constraints: the constraints for each parameter, indexed by the parameters name
+        :return: the parameters which tie all this information together
+        """
 
-    def fill_parameter(parameter: reference_parser.CParameter):
-        return Parameter(parameter.name,
-                         parameter.type,
-                         param_info.is_output(parameter),
-                         param_constraints.get(parameter.name, []),
-                         size=param_info.size(parameter))
+        def fill_parameter(parameter: reference_parser.CParameter):
+            return Parameter(parameter.name,
+                             parameter.type,
+                             param_info.is_output(parameter),
+                             param_constraints.get(parameter.name, []),
+                             size=param_info.size(parameter))
 
-    return [fill_parameter(parameter) for parameter in parameters]
+        return [fill_parameter(parameter) for parameter in parameters]
 
 
 class Function:
@@ -147,7 +204,7 @@ class Function:
 
         self.constraints, param_constraints = self.split_constraints(reference.info.constraints)
 
-        self.parameters = get_parameters(reference.parameters, reference.info, param_constraints)
+        self.parameters = Parameter.get(reference.parameters, reference.info, param_constraints)
 
         self.type = reference.type
 
@@ -161,13 +218,16 @@ class Function:
 
         self.exe = exe
 
-    def run_safe(self, params: ParameterMapping):
-        with Pool(processes=1) as pool:
-            val = pool.apply(self.run, (params))
-            print(val)
-
-
     def run(self, params: ParameterMapping):
+        """
+        Run the function on a set of inputs
+
+        Throws a FunctionRunError if these inputs do not work.
+
+        :param params: a dict containing (parameter name, value for this function call)
+        :return: the (native) value of running the function on those inputs
+        """
+
         def setup_arg(parameter: Parameter):
             native_val = params[parameter.name]
 
@@ -196,6 +256,22 @@ class Function:
         return {param.name: param.value for param in self.parameters if param.is_output}
 
     def safe_parameters(self) -> list[Parameter]:
+        """
+        Get an ordering of parameters with no backwards dependencies
+
+        Since some parameters are dependent on the value of other parameters this function retrieves the parameters
+        in an order such that a parameter can be generated using only the values of parameters that appear before it.
+
+        Currently the only dependencies captured are sizes of an array when the size is the value of another parameter.
+        As the size of an array must be scalar,
+        a safe ordering is assured if scalar parameters are determined before arrays.
+
+        Note this may not always work as some dependencies cannot be determined,
+        for example a simple expression size of an array may refer to another parameter
+        but this dependency is not captured anywhere.
+
+        :return: the safe ordering
+        """
         scalars = [param for param in self.parameters if not param.is_array()]
         arrays = [param for param in self.parameters if param.is_array()]
 
@@ -203,8 +279,14 @@ class Function:
 
     @staticmethod
     def split_constraints(constraints: list[reference_parser.Constraint]) -> tuple[
-        list[GlobalContstraint], dict[str, list[ParamConstraint]]]:
-        param_constraints: dict[str, list[ParamConstraint]]
+        list[GlobalContstraint], dict[Name, list[ParamConstraint]]]:
+        """
+        Split a full list of constraints into global and parameter constraints
+
+        :param constraints: the full list
+        :return: the global constraints, and the parameter constraints mapped to the parameter they are for
+        """
+        param_constraints: dict[Name, list[ParamConstraint]]
         param_constraints = {}
 
         global_constraints: list[GlobalContstraint]
@@ -221,11 +303,18 @@ class Function:
         return global_constraints, param_constraints
 
     def satisfied(self, inputs: ParameterMapping) -> bool:
+        """
+        Checks that all constraints (global or parameter) are satisfied by a given set of inputs
+
+        :param inputs: the values of the input parameters
+        :return: :code:`True` if all constraints are satisfied
+        """
         if not (self.constraints or any(parameter.constraints for parameter in self.parameters)):
             return True
 
-        globals = (eval(constraint.predicate, dict(inputs)) for constraint in self.constraints)
-        parameter = (eval(f"{constraint.var} {constraint.op} {constraint.val}", dict(inputs)) for parameter in self.parameters for constraint in parameter.constraints)
+        globals = (constraint.satisfied(inputs) for constraint in self.constraints)
+        parameter = (constraint.satisfied(inputs) for parameter in self.parameters for constraint in
+                     parameter.constraints)
 
         return all(globals) and all(parameter)
 
@@ -244,7 +333,6 @@ def compile_lib(path_to_compilable: str, lib_path: str):
     linker_flag = "soname" if sys.platform == "linux" else "install_name"
     cmd = f"gcc -Wall -O0 -shared -fPIC -o {lib_path} {path_to_compilable}"
     stdout, stderr = utilities.run_command(cmd)
-        
 
     if stderr:
         lumberjack.getLogger("error").error(stderr)
@@ -253,13 +341,13 @@ def compile_lib(path_to_compilable: str, lib_path: str):
 
 def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str = None) -> Function:
     """
-    Helper to generate an executable
+    Helper to generate an executable directly from files, compiling into a library
 
     :param path_to_reference: the reference directory
     :param path_to_compilable: the path to the version of the reference to compile,
     if :code:`None` then use "ref.c" in the reference directory
     :param lib_path: the .so file to compile into, generates random if not given
-    :return:
+    :return: the executable function
     """
     if path_to_compilable is None:
         ref_file = "ref.c"
@@ -271,6 +359,14 @@ def create(path_to_reference: str, path_to_compilable: str = None, lib_path: str
 
 
 def create_from(reference: FunctionReference, path_to_compilable: str, lib_path: str = None) -> Function:
+    """
+    Generate an executable, compiling into a library
+
+    :param reference: a reference to model the executable on
+    :param path_to_compilable: the path to the implementation to compile
+    :param lib_path: the .so file to compile into, generates random if not given
+    :return: the executable function
+    """
     if lib_path is None:
         if not os.path.exists(tmp_dir):
             os.makedirs(tmp_dir)
@@ -280,7 +376,25 @@ def create_from(reference: FunctionReference, path_to_compilable: str, lib_path:
 
     return Function(reference, lib_path)
 
-def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping, queue: Optional[Queue] = None):
+
+def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping,
+                   queue: Queue):
+    """
+    Builds a function, runs it on a set of inputs, and enqueues its result for later use
+
+    Necessary for running a function trial in its own process.
+    Unfortunately a :code:`Function` object, or more specifically the ctypes references it contains (?),
+    do not work nicely with multiprocessing.
+    This means that a Function can not be passed into another process,
+    the workaround for this is to build the Function inside the new process.
+
+    The queue is used so that the values obtained by running the function can be accessed in the parent process.
+
+    :param reference: the function reference to build the function from
+    :param path_to_lib: the path of the (already compiled) library to use
+    :param inputs: the inputs to run the function on
+    :param queue: the queue the results (return value and output parameter values) should be stored on
+    """
     func = Function(reference, path_to_lib)
 
     val = func.run(inputs)
@@ -288,12 +402,22 @@ def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: Param
 
     queue.put((val, outputs))
 
-def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping) -> Optional[tuple[AnyValue, ParameterMapping]]:
+
+def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping) -> Optional[
+    tuple[AnyValue, ParameterMapping]]:
+    """
+    Runs a function on a set of inputs, sand-boxed in a separate process
+
+    :param reference: the reference of the function to run
+    :param path_to_lib: the path of the (already compiled) library to use
+    :param inputs: the inputs to run the function on
+    :return: the results (return value and output parameter values) obtained from running the function
+    """
     q = Queue()
 
     p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q))
     p.start()
-    timeout = 2 #num. of seconds to wait
+    timeout = 2  # num. of seconds to wait
     p.join(timeout)
 
     if p.exitcode == 0:
@@ -303,38 +427,3 @@ def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMa
         p.close()
         lumberjack.getLogger("error").warning(f"{path_to_lib} failed on an input")
         return None
-
-'''
-if __name__ == '__main__':
-    run = create("synthesis-eval/examples/str_len", lib_path="test.so")
-
-    for param in run.parameters:
-        print(param)
-
-    #vs = {"arr": list(range(10)), "n": 10}
-    vs = {"str": "klajflkjsdlkjfklajsdlkfjalksdfjklasjefd"}
-
-    print(run.run_safe(vs))
-    for output in run.outputs():
-        print(output)
-'''
-
-if __name__ == '__main__':
-    ref_name = "synthesis-eval/examples/str_cat"
-    ref = reference_parser.load_reference(ref_name)
-    inputs = {"src": "aaaaa", "out": "bbbbb"}
-
-    #run = create_from(ref, f"{ref_name}/ref.c", "test.so")
-    run = create_from(ref, "str_cat.c", "str_cat.so")
-
-    for _ in range(10):
-        resp = run_safe(ref, run.lib_path, inputs)
-        if resp is None:
-            print("nothing came back")
-            continue
-
-        val, outputs = resp
-        print(val)
-        print("========")
-        for name, output in outputs.items():
-            print(f"{name}: {output}")

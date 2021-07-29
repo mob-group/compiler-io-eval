@@ -1,15 +1,15 @@
+from dataclasses import dataclass
 from textwrap import indent, dedent
-from typing import Optional, Any
+from typing import Any
 
 import math
 
 import lumberjack
-import utilities
 from examples import ExampleInstance, parse, form
-from randomiser import Randomiser
-from reference_parser import load_reference, FunctionReference
-from runner import Function, create, create_from, FunctionRunError, Parameter, run_safe
 from helper_types import *
+from randomiser import Randomiser
+from reference_parser import FunctionReference
+from runner import Function, Parameter, run_safe
 
 
 class Generator:
@@ -56,7 +56,12 @@ class Generator:
             lumberjack.getLogger("error").error(f"issue calling function {self.runner.name}")
             return []
 
-    def generate_input(self) -> dict[str, SomeValue]:
+    def generate_input(self) -> ParameterMapping:
+        """
+        Used to generate the input for one example
+
+        :return: the values for input parameters
+        """
         inputs = {}
 
         for param in self.runner.safe_parameters():
@@ -68,13 +73,15 @@ class Generator:
         """
         Used to generate one example
 
+        NOTE: this spawns a new process so that if the function crashes on these inputs the rest of the program is safe
+
         :return: the example generated
         """
         inputs = self.generate_input()
 
         if not self.runner.satisfied(inputs):
             return None
-        
+
         results = run_safe(self.reference, self.runner.lib_path, inputs)
         if results is None:
             raise FunctionRunError(f"could not produce value from {self.reference.name}")
@@ -89,26 +96,25 @@ class Generator:
         As some parameters depend on others, this function needs to know the values of parameters already generated.
         Hopefully this will be called in an order where dependencies are generated before their dependents.
 
+        This checks the constraints on a parameter too to limit the random sample space to valid values.
+
         :param parameter: the parameter to generate a value for
         :param current: the values already generated
         :return: the new parameter value
         """
 
-        max_val = None
-        min_val = None
+        max_val: Optional[SomeValue] = None
+        min_val: Optional[SomeValue] = None
 
         for constraint in parameter.constraints:
             if constraint.op in {"<", "<="}:
-                if max_val is None or max_val < constraint.val:
-                    max_val == constraint.val
+                if max_val is None or max_val < constraint.value:
+                    max_val = constraint.value
             elif constraint.op in {">", ">="}:
-                if min_val is None or min_val > constraint.val:
-                    min_val == constraint.val
+                if min_val is None or min_val > constraint.value:
+                    min_val = constraint.value
 
         primitive = parameter.type.contents
-        # TODO: use paramter constraints to select from valid range
-        # add in any range changes here
-        # NOTE: that's why they're all funcs
         if primitive == "int":
             def gen():
                 return self.randomiser.random_int(min_val=min_val, max_val=max_val)
@@ -116,8 +122,8 @@ class Generator:
             def gen():
                 return self.randomiser.random_float(min_val=min_val, max_val=max_val)
         elif primitive == "double":
-            def gen(min_val=min_val, max_val=max_val):
-                return self.randomiser.random_double()
+            def gen():
+                return self.randomiser.random_double(min_val=min_val, max_val=max_val)
         elif primitive == "char":
             def gen():
                 return self.randomiser.random_char()
@@ -138,11 +144,11 @@ class Generator:
         return val
 
 
+@dataclass
 class Failure:
-    def __init__(self, expected: ExampleInstance, value: Any, outputs: dict[str, Any]):
-        self.expected = expected
-        self.value = value
-        self.outputs = outputs
+    expected: ExampleInstance
+    value: Any
+    outputs: dict[str, Any]
 
     def __str__(self):
         return f"input {self.expected.inputs} produced incorrect values (expected vs. real);\
@@ -150,6 +156,10 @@ class Failure:
 
 
 class Result:
+    """
+    Contains the results of testing a series of inputs on a function
+    """
+
     def __init__(self, passes: int, tests: int, failures: list[Failure], name: str = None):
         assert passes >= 0 and tests >= 0  # len(failures) is implicitly >= 0
         assert passes + len(failures) == tests
@@ -160,12 +170,24 @@ class Result:
         self.name = name
 
     def passed(self) -> bool:
+        """
+        :return: :code:`True` if all tests passed
+        """
         return self.passes == self.tests
 
     def is_trivial(self) -> bool:
+        """
+        :return: :code:`True` if no tests were run
+        """
         return self.tests == 0
 
     def full(self, show_fails: bool) -> str:
+        """
+        Formats the result into a nice description
+
+        :param show_fails: set to :code:`True` to put any failed tests in the description
+        :return: the prettified result
+        """
         if show_fails and self.failures:
             return dedent('''\
             {summ}
@@ -176,6 +198,9 @@ class Result:
             return str(self)
 
     def show_failures(self) -> str:
+        """
+        :return: any failures, formatted nicely
+        """
         return indent("\n".join(str(failure) for failure in self.failures), " >> ")
 
     def __str__(self):
@@ -226,9 +251,12 @@ class Evaluator:
         """
         Runs an example and checks whether the result matches the expected
 
+        NOTE: this spawns a new process so that if the function crashes on these inputs the rest of the program is safe
+
         :param example: the example to use
         :return: whether or not the output of the example matches the expected output
         """
+
         def check_value(expected_value: AnyValue, actual_value: AnyValue) -> bool:
             if expected_value == actual_value:
                 return True
@@ -278,7 +306,7 @@ class Evaluator:
         return Result(passes, len(examples), failures)
 
 
-def evaluate(run: Function, ex_file: str) -> Result:
+def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
     """
     Helper method to check a reference function against examples
 
@@ -287,7 +315,7 @@ def evaluate(run: Function, ex_file: str) -> Result:
     :param ex_file: the examples to evaluate with
     :return: the evaluation result of the test
     """
-    e = Evaluator(run)
+    e = Evaluator(ref, run)
     examples = e.read(ex_file)
     result = e.check(examples)
 
@@ -303,7 +331,6 @@ def generate(ref: FunctionReference, run: Function, n: int) -> list[ExampleInsta
     :param ref: the reference of the function
     :param run: the executable of the function
     :param n: the number of examples to make
-    :param ex_file: the file to save the examples into, if :code:`None` then don't write anywhere
     :return: the examples produced
     """
     g = Generator(ref, run)
@@ -311,61 +338,14 @@ def generate(ref: FunctionReference, run: Function, n: int) -> list[ExampleInsta
 
     return examples
 
+
 def write_examples(ref: FunctionReference, examples: list[ExampleInstance], ex_file: str):
+    """
+    Writes a collection of examples to a file
+
+    :param ref: the reference the examples are for
+    :param examples: the examples
+    :param ex_file: the file to write the examples into
+    """
     with open(ex_file, "w") as f:
         f.write('\n'.join(form(ref, examples)))
-
-if __name__ == '__main__':
-    ref_dir = "synthesis-eval/examples/str_cat"
-    ref = load_reference(ref_dir)
-    run = create_from(ref, f"{ref_dir}/ref.c", lib_path="test.so")
-    egs = generate(run, 200)
-    write_examples(ref, egs, "test.examples")
-    print(evaluate(run, "test.examples").full(True))
-
-
-'''
-if __name__ == '__main__':
-    import argparse
-
-    argparser = argparse.ArgumentParser()
-    argparser.add_argument("ref", help="path to the reference program")
-
-    subparsers = argparser.add_subparsers()
-
-    eval_parser = subparsers.add_parser("eval")
-    eval_parser.add_argument("-e", "--examples", help="path to file containing examples")
-    eval_parser.add_argument("program", help="path to the program to evaluate")
-
-    gen_parser = subparsers.add_parser("gen")
-    gen_parser.add_argument("num_examples", type=int, help="number of examples to generate")
-    gen_parser.add_argument("examples", help="path to examples file to write")
-
-    args = argparser.parse_args()
-
-    ref = load_reference(args.ref)
-    try:
-        # assumes its an eval
-        run = create(args.ref, args.program)
-
-        if args.examples is None:
-            default_examples = 50
-
-            example_file = utilities.get_tmp_path()
-            # generate examples using the gcc compiled reference function
-            # NOT the sample implementation
-            example_run = create(args.ref)
-            examples = generate(example_run, default_examples)
-            write_examples(ref, examples, example_file)
-        else:
-            example_file = args.examples
-
-        print(evaluate(run, example_file).full(True))
-    except AttributeError:
-        # it's a gen instead
-        ref = load_reference(args.ref)
-        run = create_from(ref, )
-        assert args.num_examples > 0
-        examples = generate(run, args.num_examples)
-        write_examples()
-'''
