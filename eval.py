@@ -326,7 +326,6 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[Refere
     :param impldir: the directory containing all implementations
     :param num_examples: the number of example to (attempt to) generate for each reference
     :param impl_exts: the valid file extensions for an implementation
-    :return:
     """
 
     lumberjack.getLogger("general").info(f"testing beginning: {datetime.now():%d/%m/%Y %H:%M:%S}")
@@ -357,5 +356,5 @@ if __name__ == '__main__':
 
     args = argparser.parse_args()
 
-    results = test(args.references, args.implementations, 1, impl_exts={".s"})
+    results = test(args.references, args.implementations, 1, impl_exts=assembly_files)
     print(ReferenceResult.gen_report(results, True, partitioned=True))

@@ -4,17 +4,56 @@ This is a tool to benchmark compilers correctness, by testing a compiled functio
 the function. This library provides a method of generating these pairs using [GCC](https://gcc.gnu.org/). A function can
 then be checked against these I/O pairs, to see if the compiled version produces the correct output.
 
-The library is modular, so it is made up of a few different components.
+## requirements
+
+This project support Python 3.9 only.
+It depends on [synthesis-eval](https://github.com/mob-group/synthesis-eval) for an example set.
+
+## usage
+
+The main script can be found in "eval.py", which can be used as follows.
+
+     python3 eval.py REFERENCES IMPLEMENTATIONS
+
+Here `REFERENCES` is the directory containing all reference directories,
+and `IMPLEMENTATIONS` is the directory contatining all imlementation directories.
+As an example the script would be called as `python3 eval.py refs impls` if the following was the directory structure.
+
+     .
+     +-- refs/
+     |   +-- a/
+     |   |   +-- ref.c
+     |   |   +-- props
+     |   +-- b/
+     |   |   +-- ref.c
+     |   |   +-- props
+     +-- impla/
+     |   +-- a/
+     |   |   +-- a-1.s
+     |   |   +-- a-2.s
+     |   |   +-- a-3.s
+     |   +-- b/
+     |   |   +-- b-1.s
+     |   |   +-- b-2.s
+     |   |   +-- b-3.s
+     |   |   +-- b-4.s
+
+The output of the benchmarks are written as a report to stdout,
+and any issues encountered in the process are written to "benchmarking.log".
 
 ## components
 
-- reference_parser.py *
+The library is modular, so it is made up of a few different components.
+
+- reference_parser.py
 - runner.py
 - examples.py
 - randomiser.py
-- evaluation.py *
+- evaluation.py
+- helper_types.py
+- lumberjack.py
 
-Components marked with a * are usable as a command line tool.
+*`reference_parser` can be used as a command line tool*
 
 ### reference_parser
 
@@ -39,10 +78,10 @@ the reference if it is valid, otherwise it will write any issues to **stderr**.
 
 #### examples
 
-In the following directory structure, if the current directory was `/src`:
+In the following directory structure, where `*` denotes the current directory:
 
     .
-    +-- src
+    +-- src *
     |   +-- reference_parser.py
     +-- examples
     |   +-- a
@@ -71,13 +110,16 @@ This component contains the functionality for executing a reference function. It
 able to run [shared objects](https://tldp.org/HOWTO/Program-Library-HOWTO/shared-libraries.html). All conversions
 between native and foreign types are handled here, so the use of the library is opaque to the programmer.
 
-`runner.py` exposes the types `ScalarValue`, `ArrayValue`, `SomeValue`, `AnyValue`. These are used to denote the native
-Python versions of C types supported in this library. The meanings of scalar and array values should be obvious, except
-note that as Python lacks a `char` type both this and `char *` are defined as Python `str`'s.
-`SomeValue` is either a scalar or array value, and `AnyValue` differs from `SomeValue` only because it can be `None`
-/`void`.
-
 The method `create` is also exposed; this is a helper to set up an executable reference function.
+
+#### sand-boxing
+
+The implementations being tested may have problems, some of these will be fatal;
+if they were run directly by the benchmarker then any crashes would also cause the benchmark to crash,
+leaving all the following implementations untested.
+To prevent this from happening whenever the function is called a new process is spawned.
+The implementation runs in this process, and its outputs are extracted into the parent process (the benchmark).
+The function `run_safe` is exposed to do this.
 
 ### examples.py
 
@@ -108,29 +150,138 @@ random value for each of the supported types.
 
 ### evaluation.py
 
-This component contains the functionality to generat and evaluate examples for a reference.
+This component contains the functionality to generate and evaluate examples for a reference.
 
-It can be used as a command line tool, with two subcommands `eval` and `gen`.
+This component provides functions that do the main tasks, `generate`, `write_examples`, and `evaluate`.
+As the name suggests `generate` is used to generate examples, given a reference and an implementation to use;
+these examples are produced in the method described in [generation](#example-generation).
+`write_examples` can then be used to store these in a file if necessary.
+Again, `evaluate` does as it says, and evaluates a set of examples on a particular implementation.
 
-The first subcommand, `eval`, is used as follows:
+### helper_types.py
 
-    python3 evaluation.py REFERENCE eval [-e EXAMPLES] PROGRAM
+To avoid circular dependencies all common data is extracted into a separate file.
 
-This takes a program given in `PROGRAM` and evaluates it. The program should be an implementation of a function that can
-be compiled to a ".so" file, for example a ".c" source file, or an intermediate ".s" file. It gets the relevant
-information about this function from the reference directory `REFERENCE` and tests the program against the examples
-found in `EXAMPLES`. If no example file is given then examples are generated by compiling the reference function, for
-more detail see [example generation](#example-generation).
+`helper_types` exposes the types `ScalarValue`, `ArrayValue`, `SomeValue`, `AnyValue`. These are used to denote the native
+Python versions of C types supported in this library. The meanings of scalar and array values should be obvious, except
+note that as Python lacks a `char` type both this and `char *` are defined as Python `str`'s.
+`SomeValue` is either a scalar or array value, and `AnyValue` differs from `SomeValue` only because it can be `None`
+/`void`.
 
-The second subcommand is `gen`:
+It also exposes the aliases `Name` and `Parser` which are just used to clarify the purpose of a value in certain places.
+Similarly the type `ParameterMapping` is commonly used to store parameter names and their values in a dictionary.
 
-    python3 evaluation.py REFERENCE gen NUM_EXAMPLES EXAMPLES
+There are also many errors defined in `helper_types`. These are used throughout,
+and depending on what they are used for they may be either a simple subclass of `Exception`,
+or actually provide some functionality.
 
-This takes a reference directory `REFERENCE`, generates `NUM_EXAMPLES` examples from that reference and stores the
-results in the file `EXAMPLES`.
+### lumberjack.py 
 
-This component also provides functions that do similar tasks,
-`generate` and `evaluate` for use as a module.
+`lumberjack` is a simple interface to `logging`.
+This is used to ensure all loggers are set up correctly, whichever module is used.
+
+# notes
+
+There are a few tricky concepts in this project, so what follows will be more detail on the most important of those.
+
+## benchmarking a function
+
+Benchmarking a function involves a lot of phases, spread out across the different components,
+and understanding them is key to understanding the code at all.
+
+The flow for benchmarking a single function contained in an implementation file,
+with a corresponding reference directory uses the following process:
+
+  1. parse reference: `<reference> -> ref`
+  2. build reference function: `ref, <reference/ref.c> -> run`
+  3. build generator: `ref, run -> generator`
+  4. generate examples: `generator -> examples`
+  5. build real function: `ref, <implementation> -> run'`
+  6. build evaluator: `ref, run' -> evaluator`
+  7. check examples: `evaluator, examples -> results`
+
+Note that this is the idealised flow,
+due to [sand-boxing](#sand-boxing) the actual flow looks slightly different (and less obvious).
+This means building a function (creating a `run`) is typically delayed until the function has to be run,
+and then a new function will be created specifically for that run.
+This is true for both generation and evaluation.
+
+## benchmarking a collection of functions
+
+The process for running the benchmark on many references and implementations can also be thought of in phases.
+These steps look distinct from those laid out for [a single function](#benchmarking-a-function);
+that procedure is still taking place here, only beneath the surface.
+
+To benchmark many functions this library will:
+
+   1. retrieve - fetches all folders and files which could be testable
+      1. get all reference folders which contain "ref.c" and "props"
+      2. get all implementation files from the folder with the same name which end with a valid extension
+   2. build - iterates over all folders and files found and converts them to usable objects
+      1. turn each folder into a `FunctionReference`, skip this whole reference if it fails
+      2. turn each implementation for that reference into a `Function`, also skip if it fails
+   3. test - tests each reference and store all the results
+      1. build a `Generator` and generate examples for each reference
+      2. build an `Evaluator` for each implementation and test on the examples
+
+### skips
+
+Knowing when references and implementations are skipped is tricky, so here is an example flow covering most cases.
+It will show which entries are being considered after each pass, given the starting directories:
+
+    .
+    +-- refs/
+    |   +-- a/
+    |   |   +-- ref.c
+    |   |   +-- props
+    |   +-- b/
+    |   |   +-- ref.c
+    |   |   +-- props
+    |   +-- c/
+    |   |   +-- ref.c
+    |   |   +-- props
+    |   +-- d/
+    |   |   +-- ref.c [invalid]
+    |   |   +-- props
+    |   +-- e/
+    |   |   +-- props
+    |   +-- f/
+    |   |   +-- README.md
+    |   +-- g.txt
+    |-- impls
+    |   +-- a/
+    |   |   +-- a-1.s
+    |   |   +-- a-2.s [invalid]
+    |   |   +-- a-3.s [always segfaults]
+    |   +-- b/
+    |   |   +-- b-1.s [invalid]
+    |   |   +-- b-2.s [invalid]
+    |   +-- c/
+    |   +-- d/
+    |   |   +-- d-1.s
+    |   |   +-- d-2.s
+    |   +-- e/
+    |   |   +-- e-1.s
+    |   |   +-- e-2.s
+    |   +-- f/
+    |   |   +-- f-1.s
+    |   |   +-- f-2.s
+
+**after fetching:**
+
+    a/ [a-1.s, a-2.s, a-3.s]
+    b/ [b-1.s, b-2.s]
+    d/ [d-1.s, d-2.s]
+
+**after building:**
+
+    a/ [a-1.s, a-3.s]
+
+**final results:**
+
+     PASSES 1/2: a-1.s 50/50 OK
+     FAILS: 0/2:
+     TRIVIAL 1/2: a-2.s 0/0 OK
 
 ## example generation
 
@@ -178,4 +329,39 @@ parameters. In summary, the procedure for calling a reference function from Pyth
     1. dynamically convert these native Python arguments to their `ctypes` counterpart
     2. keep track of these `ctypes` objects if their value is required later
 5. extract the return value and output values after the function call
+    
+## props files
 
+Each function reference has certain properties, in a "props" file, which are used in various ways throughout the code.
+The grammar for this "props" file is given below. This clarifies what is allowed in a "props" file but,
+as productions map nicely onto classes, it also gives context for certain types.
+
+    PROPS      ::= <signature> INFO
+    INFO       ::= OUTPUT | SIZE | CONSTRAINT
+    OUTPUT     ::= "output" <var_name>
+    SIZE       ::= "size" <var_name> "," <var_name>
+                 | "size" <var_name> "," <integer>
+                 | "size" <var_name> "," "{" <expr> "}"
+                 | "size" <var_name> "," <integer> "," "{" <expr> "}"
+    CONSTRAINT ::= "constraint" <var_name> OP <any value>
+                 | "constraint" "{" <expr> "}"
+    OP         ::= "==" | "!=" | "<" | "<=" | ">" | ">="
+
+As mentioned above certain classes correspond precisely to these productions:
+
+  - `ParamSize` objects are constructed from SIZE productions
+    - `VarSize`, `ConstSize`, `SimpleExprSize`, and `ExprSize` objects come from each branch in that production
+  - `Constraint` objects are constructed from CONSTRAINT productions
+    - `ParamConstraint`, and `GlobalConstraint` objects match each branch respectively too
+
+# issues
+
+current known issues are:
+
+   - process hangs after finishing
+      - can CTRL-C if used manually
+      - could wrap it in a timeout shell script?
+   - parsing for expressions is not perfect, fails if a comma appears in a simple expression
+      - could use a proper parser generator (the grammar is already written)
+      - can change the current parser to handle those expressions better
+   -

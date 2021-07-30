@@ -80,7 +80,7 @@ class CParameter:
     """
     A wrapper for a parameter.
     """
-    name: str
+    name: Name
     type: CType
 
     @staticmethod
@@ -111,7 +111,7 @@ class FunctionSignature:
     """
     A C function's full signature
     """
-    name: str
+    name: Name
     type: CType
     parameters: List[CParameter]
 
@@ -159,7 +159,7 @@ class ParamSize:
     """
     The base type for sizes of array parameters
     """
-    arr: str
+    arr: Name
 
     @staticmethod
     def parse(size: str):
@@ -187,20 +187,20 @@ class ParamSize:
 
             assert expr.startswith("{") and expr.endswith("}")
 
-            return ExprSize(arr, val, expr[1:-1])
+            return ExprSize(Name(arr), val, expr[1:-1])
         except StopIteration:
             try:
                 val = int(size[next_start:])
-                return ConstSize(arr, val)
+                return ConstSize(Name(arr), val)
             except ValueError:
                 var = size[next_start:].rstrip()
 
                 if var.startswith("{"):
                     assert var.endswith("}")
 
-                    return SimpleExprSize(arr, var[1:-1])
+                    return SimpleExprSize(Name(arr), var[1:-1])
                 else:
-                    return VarSize(arr, var)
+                    return VarSize(Name(arr), Name(var))
 
     def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
         """
@@ -223,8 +223,8 @@ class VarSize(ParamSize):
     """
     Denotes an association between a array parameter, and a scalar parameter containing the array's size
     """
-    arr: str
-    var: str
+    arr: Name
+    var: Name
 
     def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
         var = self.var
@@ -240,7 +240,7 @@ class ConstSize(ParamSize):
 
     Note this constant can also be treated as a *maximum* size.
     """
-    arr: str
+    arr: Name
     size: int
 
     def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
@@ -255,7 +255,7 @@ class ExprSize(ParamSize):
     Contains the size for the initial size of the array (for generation),
     and an expression to calculate the maximum size the array can be (to create a foreign array large enough).
     """
-    arr: str
+    arr: Name
     init: int
     expr: str
 
@@ -277,7 +277,7 @@ class SimpleExprSize(ParamSize):
     This is useful to encode a more complicated relationship between parameters,
     for example in matrices where the size of an m x n array M needs to be { m * n }
     """
-    arr: str
+    arr: Name
     expr: str
 
     def evaluate(self, values: dict, initial: bool = False) -> Optional[int]:
@@ -320,7 +320,7 @@ class Constraint:
 
             assert op in {">", "<", ">=", "<=", "==", "!="}
 
-            return ParamConstraint(var, op, val)
+            return ParamConstraint(Name(var), op, val)
 
     def satisfied(self, inputs: ParameterMapping) -> bool:
         """
@@ -337,7 +337,7 @@ class ParamConstraint(Constraint):
     """
     A constraint on a single parameter
     """
-    var: str
+    var: Name
     op: str
     val: str
 
@@ -372,7 +372,7 @@ class FunctionInfo:
 
     This includes the names of any output parameters, and the given sizes of any array parameters.
     """
-    outputs: List[str]
+    outputs: List[Name]
     sizes: List[ParamSize]
     constraints: List[Constraint]
 
@@ -392,7 +392,7 @@ class FunctionInfo:
 
         for line in info:
             if line.startswith("output"):
-                outputs.append(line.removeprefix("output").strip())
+                outputs.append(Name(line.removeprefix("output").strip()))
             elif line.startswith("size"):
                 size = ParamSize.parse(line.removeprefix("size").strip())
                 sizes.append(size)

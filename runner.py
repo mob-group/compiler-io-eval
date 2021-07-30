@@ -213,7 +213,7 @@ class Function:
             exe.restype = None
         else:
             assert reference.type.pointer_level == 0
-            return_val = Parameter(f"{self.name}_return", reference.type, True, [])
+            return_val = Parameter(Name(f"{self.name}_return"), reference.type, True, [])
             exe.restype = return_val.primitive()
 
         self.exe = exe

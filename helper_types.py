@@ -4,6 +4,9 @@ from typing import Union, NewType, Callable, Optional
 
 tmp_dir = "_tmp"
 
+assembly_files = {".s", ".S"}
+c_files = {".c"}
+
 # REGULAR TYPES
 
 ScalarValue = Union[int, float, bool, str]
