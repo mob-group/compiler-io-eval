@@ -343,7 +343,7 @@ class CReference:
                          inter.code)
 
         for size in inter.info.sizes:
-            ref.param_dict[size.array].c_type.size = size.var
+            ref.param_Dict[size.array].c_type.size = size.var
 
         return ref
 

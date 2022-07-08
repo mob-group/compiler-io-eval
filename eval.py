@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from textwrap import indent, dedent
 from typing import *
+from typing import Dict, List, Tuple, Set
 
 import lumberjack
 from evaluation import generate, Evaluator, Result, write_examples
@@ -11,8 +12,8 @@ from helper_types import *
 from reference_parser import load_reference, FunctionReference
 from runner import create_from, Function
 
-ReferenceFile = tuple[FunctionReference, os.DirEntry]
-ImplementationFile = tuple[Function, os.DirEntry]
+ReferenceFile = Tuple[FunctionReference, os.DirEntry]
+ImplementationFile = Tuple[Function, os.DirEntry]
 
 
 def setup_impl(impl: os.DirEntry) -> str:
@@ -47,7 +48,7 @@ def setup_impl(impl: os.DirEntry) -> str:
     return tmp_impl
 
 
-def implementations(basedir: str, func: str, exts: set[str]) -> list[os.DirEntry]:
+def implementations(basedir: str, func: str, exts: Set[str]) -> List[os.DirEntry]:
     """
     Retrieves all (potential) implementations from a directory
 
@@ -67,8 +68,8 @@ def implementations(basedir: str, func: str, exts: set[str]) -> list[os.DirEntry
         return []
 
 
-def references(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
-    tuple[os.DirEntry, list[os.DirEntry]], None, None]:
+def references(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
+    Tuple[os.DirEntry, List[os.DirEntry]], None, None]:
     """
     Retrieves all (potential) function references
 
@@ -120,8 +121,8 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
     return None
 
 
-def fetch(refdir: str, impldir: str, impl_exts: set[str]) -> Generator[
-    tuple[ReferenceFile, list[ImplementationFile]], None, None]:
+def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
+    Tuple[ReferenceFile, List[ImplementationFile]], None, None]:
     """
     Retrieves and builds all references and their implementations
 
@@ -167,7 +168,7 @@ class ReferenceResult:
     A collection of results for a reference with multiple implementations
     """
 
-    def __init__(self, name: str, results: list[Result]):
+    def __init__(self, name: str, results: List[Result]):
         self.name = name
         self.results = results
 
@@ -284,7 +285,7 @@ class ReferenceResult:
 
 
 def test_implementation(ref: FunctionReference, implementation: ImplementationFile,
-                        examples: list[ExampleInstance]) -> Result:
+                        examples: List[ExampleInstance]) -> Result:
     """
     Tests a single implementation on a collection of examples
 
@@ -302,8 +303,8 @@ def test_implementation(ref: FunctionReference, implementation: ImplementationFi
     return result
 
 
-def test_reference(reference: ReferenceFile, impls: list[ImplementationFile],
-                   examples: list[ExampleInstance]) -> ReferenceResult:
+def test_reference(reference: ReferenceFile, impls: List[ImplementationFile],
+                   examples: List[ExampleInstance]) -> ReferenceResult:
     """
     Tests a singular reference, with many implementations, on a collection of examples
 
@@ -316,7 +317,7 @@ def test_reference(reference: ReferenceFile, impls: list[ImplementationFile],
     return ReferenceResult(ref_dir.name, [test_implementation(ref, impl, examples) for impl in impls])
 
 
-def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> list[ReferenceResult]:
+def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> List[ReferenceResult]:
     """
     Tests all implementations and their corresponding references on examples
 

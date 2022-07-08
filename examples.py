@@ -4,11 +4,12 @@ from typing import *
 
 from reference_parser import CType, CParameter, UnsupportedTypeError, FunctionReference
 from helper_types import *
+from typing import Dict, List, Tuple, Set
 
 base_str = "({inputs}) {value} ({outputs})"
 
-TypeMapping = list[tuple[Name, CType]]
-ParserMapping = list[tuple[Name, Parser]]
+TypeMapping = List[Tuple[Name, CType]]
+ParserMapping = List[Tuple[Name, Parser]]
 
 @dataclass
 class ExampleInstance:
@@ -51,7 +52,7 @@ class ExampleInstance:
             :return: the example that has been parsed. Returns :code:`None` if this example could not be parsed
             """
 
-        def parse_group(s: str, grp: ParserMapping) -> Optional[tuple[ParameterMapping, str]]:
+        def parse_group(s: str, grp: ParserMapping) -> Optional[Tuple[ParameterMapping, str]]:
             """
             Helper function to parse something of the form:
 
@@ -99,7 +100,7 @@ class ExampleInstance:
         return ExampleInstance(input_vals, ret_val, output_vals)
 
 
-def form(reference: FunctionReference, examples: list[ExampleInstance]) -> list[str]:
+def form(reference: FunctionReference, examples: List[ExampleInstance]) -> List[str]:
     '''
     if isinstance(reference, FunctionReference):
         inputs = [(param.name, param.type) for param in reference.parameters]
@@ -121,7 +122,7 @@ def form(reference: FunctionReference, examples: list[ExampleInstance]) -> list[
 
 
 def form_examples(inputs: TypeMapping, value: CType, outputs: TypeMapping,
-                  examples: list[ExampleInstance]) -> list[str]:
+                  examples: List[ExampleInstance]) -> List[str]:
     sig_str = [form_ref(inputs, value, outputs)]
     example_strs = [ex.form(inputs, value, outputs) for ex in examples]
 
@@ -146,7 +147,7 @@ def form_value(val: AnyValue, c_type: CType) -> str:
     return str(val)
 
 
-def parse(sig: str, examples: list[str]) -> list[ExampleInstance]:
+def parse(sig: str, examples: List[str]) -> List[ExampleInstance]:
     """
     Uses a signature string and a list of examples to build the collection
 
@@ -214,7 +215,7 @@ def parse_sig(s: str):
 
 
 def parse_examples(inputs: ParserMapping, value: Parser, outputs: ParserMapping,
-                   examples: list[str]) -> list[ExampleInstance]:
+                   examples: List[str]) -> List[ExampleInstance]:
     """
     Parses a collection of examples using the given parsers.
 

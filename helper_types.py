@@ -1,4 +1,5 @@
 from typing import Union, NewType, Callable, Optional
+from typing import Dict, List, Tuple, Set
 
 # HELPFUL CONSTANTS
 
@@ -10,14 +11,14 @@ c_files = {".c"}
 # REGULAR TYPES
 
 ScalarValue = Union[int, float, bool, str]
-ArrayValue = Union[str, list[ScalarValue]]
+ArrayValue = Union[str, List[ScalarValue]]
 SomeValue = Union[ScalarValue, ArrayValue]
 AnyValue = Union[SomeValue, None]
 
 Name = NewType("Name", str)
 Parser = NewType("Parser", Callable)
 
-ParameterMapping = dict[Name, SomeValue]
+ParameterMapping = Dict[Name, SomeValue]
 
 # ERROR TYPES
 

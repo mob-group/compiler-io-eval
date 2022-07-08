@@ -3,6 +3,7 @@ import os
 import sys
 from dataclasses import dataclass
 from multiprocessing import Queue, Process
+from typing import Dict, List, Tuple, Set
 
 import lumberjack
 import randomiser
@@ -23,7 +24,7 @@ class Parameter:
     name: Name
     type: CType
     is_output: bool
-    constraints: list[ParamConstraint]
+    constraints: List[ParamConstraint]
 
     size: Optional[ParamSize] = None
     ref: Optional = None
@@ -165,9 +166,9 @@ class Parameter:
         return self.unpack(self.ref)
 
     @staticmethod
-    def get(parameters: list[reference_parser.CParameter],
+    def get(parameters: List[reference_parser.CParameter],
             param_info: reference_parser.FunctionInfo,
-            param_constraints: dict[str, list[Constraint]]):
+            param_constraints: Dict[str, List[Constraint]]):
         """
         Builds a list of parameters
 
@@ -255,7 +256,7 @@ class Function:
         """
         return {param.name: param.value for param in self.parameters if param.is_output}
 
-    def safe_parameters(self) -> list[Parameter]:
+    def safe_parameters(self) -> List[Parameter]:
         """
         Get an ordering of parameters with no backwards dependencies
 
@@ -278,18 +279,18 @@ class Function:
         return scalars + arrays
 
     @staticmethod
-    def split_constraints(constraints: list[reference_parser.Constraint]) -> tuple[
-        list[GlobalContstraint], dict[Name, list[ParamConstraint]]]:
+    def split_constraints(constraints: List[reference_parser.Constraint]) -> Tuple[
+        List[GlobalContstraint], Dict[Name, List[ParamConstraint]]]:
         """
         Split a full list of constraints into global and parameter constraints
 
         :param constraints: the full list
         :return: the global constraints, and the parameter constraints mapped to the parameter they are for
         """
-        param_constraints: dict[Name, list[ParamConstraint]]
+        param_constraints: Dict[Name, List[ParamConstraint]]
         param_constraints = {}
 
-        global_constraints: list[GlobalContstraint]
+        global_constraints: List[GlobalContstraint]
         global_constraints = []
         for constraint in constraints:
             if isinstance(constraint, reference_parser.GlobalContstraint):
@@ -404,7 +405,7 @@ def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: Param
 
 
 def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping) -> Optional[
-    tuple[AnyValue, ParameterMapping]]:
+    Tuple[AnyValue, ParameterMapping]]:
     """
     Runs a function on a set of inputs, sand-boxed in a separate process
 

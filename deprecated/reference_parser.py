@@ -5,6 +5,7 @@ from sys import stderr
 from json import dumps
 from enum import Enum
 from dataclasses import dataclass, asdict
+from typing import Dict, List, Tuple, Set
 
 
 class ParseIssue(Enum):
@@ -331,7 +332,7 @@ class FunctionReference:
             name = param.name
             c_type = param.type
 
-            param_dict[name] = c_type
+            param_Dict[name] = c_type
             if c_type.pointer_level == 0:
                 scalar_params.add(name)
             elif c_type.pointer_level == 1:
@@ -346,7 +347,7 @@ class FunctionReference:
                 issues.add(ParseIssue.InvalidIdentifierName)
 
         for output in self.info.outputs:
-            if param_dict[output].pointer_level == 0:
+            if param_Dict[output].pointer_level == 0:
                 issues.add(ParseIssue.ScalarOutputParameter)
 
         sized = set()
@@ -358,11 +359,11 @@ class FunctionReference:
             if array not in array_params:
                 issues.add(ParseIssue.ScalarGivenSize)
 
-            if param_dict[var].contents not in {"int"}:
+            if param_Dict[var].contents not in {"int"}:
                 issues.add(ParseIssue.GivenInvalidSize)
 
         for array in array_params - sized:
-            if param_dict[array].contents not in {"char"}:
+            if param_Dict[array].contents not in {"char"}:
                 issues.add(ParseIssue.UnsizedArrayParameter)
 
         code = self.code

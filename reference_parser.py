@@ -8,6 +8,7 @@ from typing import *
 
 import lumberjack
 from helper_types import *
+from typing import Dict, List, Tuple, Set
 
 
 class ParseIssue(Enum):
@@ -542,7 +543,7 @@ class FunctionReference:
             name = param.name
             c_type = param.type
 
-            param_dict[name] = c_type
+            param_Dict[name] = c_type
             if c_type.pointer_level == 0:
                 scalar_params.add(name)
             elif c_type.pointer_level == 1:
@@ -560,12 +561,12 @@ class FunctionReference:
             if not isinstance(constraint, ParamConstraint):
                 continue
 
-            if (constraint.var in array_params or param_dict[
+            if (constraint.var in array_params or param_Dict[
                 constraint.var].contents == "char") and constraint.op not in {"==", "!="}:
                 issues.add(ParseIssue.InvalidConstraint)
 
         for output in self.info.outputs:
-            if param_dict[output].pointer_level == 0:
+            if param_Dict[output].pointer_level == 0:
                 if fix:
                     self.info.outputs.remove(output)
                 else:
@@ -585,7 +586,7 @@ class FunctionReference:
             if isinstance(size, VarSize):
                 var = size.var
 
-                if param_dict[var].contents not in {"int"}:
+                if param_Dict[var].contents not in {"int"}:
                     issues.add(ParseIssue.GivenInvalidSize)
             elif isinstance(size, ConstSize):
                 if size.size < 0:
@@ -595,7 +596,7 @@ class FunctionReference:
                     issues.add(ParseIssue.GivenInvalidSize)
 
         for array in array_params - sized:
-            if fix and param_dict[array] == CType("char", 1):
+            if fix and param_Dict[array] == CType("char", 1):
                 default_str_size = 100
                 self.info.sizes.append(ConstSize(array, default_str_size))
             else:
@@ -610,14 +611,14 @@ class FunctionReference:
 
         return issues
 
-    def validate(self, issues, ignorable: set[issues] = None):
+    def validate(self, issues, ignorable: Set[issues] = None):
         if ignorable is None:
             ignorable = ParseIssue.ignorable()
 
         if issues - ignorable:
             raise ParseError("parse contained issues", reference_name=self.name)
 
-    def show_issues(self, issues: set[ParseIssue], verbose: bool = False, ignore_good: bool = False) -> None:
+    def show_issues(self, issues: Set[ParseIssue], verbose: bool = False, ignore_good: bool = False) -> None:
         """
         Write any issues in the function to stderr
 
@@ -635,7 +636,7 @@ class FunctionReference:
         elif not ignore_good:
             print(f"{self.name} is good", file=stderr)
 
-    def log_issues(self, issues: set[ParseIssue]):
+    def log_issues(self, issues: Set[ParseIssue]):
         """
         Write any issues found to the error log
 

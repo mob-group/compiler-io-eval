@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from textwrap import indent, dedent
 from typing import Any
+from typing import Dict, List, Tuple, Set
 
 import math
 
@@ -28,7 +29,7 @@ class Generator:
         random_seed = None  # non-random seed doesn't play nicely with processes
         self.randomiser = Randomiser(seed=random_seed)
 
-    def generate(self, n: int) -> list[ExampleInstance]:
+    def generate(self, n: int) -> List[ExampleInstance]:
         """
         Used to generate multiple examples
 
@@ -148,7 +149,7 @@ class Generator:
 class Failure:
     expected: ExampleInstance
     value: Any
-    outputs: dict[str, Any]
+    outputs: Dict[str, Any]
 
     def __str__(self):
         return f"input {self.expected.inputs} produced incorrect values (expected vs. real);\
@@ -160,7 +161,7 @@ class Result:
     Contains the results of testing a series of inputs on a function
     """
 
-    def __init__(self, passes: int, tests: int, failures: list[Failure], name: str = None):
+    def __init__(self, passes: int, tests: int, failures: List[Failure], name: str = None):
         assert passes >= 0 and tests >= 0  # len(failures) is implicitly >= 0
         assert passes + len(failures) == tests
 
@@ -219,7 +220,7 @@ class Evaluator:
         self.runner = runner
 
     @staticmethod
-    def read(example_file: str) -> list[ExampleInstance]:
+    def read(example_file: str) -> List[ExampleInstance]:
         """
         Parses an example file into examples to use
 
@@ -232,7 +233,7 @@ class Evaluator:
 
         return parse(sig, examples)
 
-    def transform(self, examples: list[ExampleInstance]):
+    def transform(self, examples: List[ExampleInstance]):
         """
         Currently useless, put all cleanup code for examples here
 
@@ -285,7 +286,7 @@ class Evaluator:
 
         return None
 
-    def check(self, examples: list[ExampleInstance]) -> Result:
+    def check(self, examples: List[ExampleInstance]) -> Result:
         """
         Evaluates many examples, uses :code:`check_example`
 
@@ -324,7 +325,7 @@ def evaluate(ref: FunctionReference, run: Function, ex_file: str) -> Result:
     return result
 
 
-def generate(ref: FunctionReference, run: Function, n: int) -> list[ExampleInstance]:
+def generate(ref: FunctionReference, run: Function, n: int) -> List[ExampleInstance]:
     """
     Helper method to produce examples to check against a function
 
@@ -339,7 +340,7 @@ def generate(ref: FunctionReference, run: Function, n: int) -> list[ExampleInsta
     return examples
 
 
-def write_examples(ref: FunctionReference, examples: list[ExampleInstance], ex_file: str):
+def write_examples(ref: FunctionReference, examples: List[ExampleInstance], ex_file: str):
     """
     Writes a collection of examples to a file
 
