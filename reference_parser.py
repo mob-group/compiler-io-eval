@@ -10,6 +10,11 @@ import lumberjack
 from helper_types import *
 from typing import Dict, List, Tuple, Set
 
+def removesuffix(input_string, suffix):
+    if suffix and input_string.endswith(suffix):
+        return input_string[:-len(suffix)]
+    return input_string
+
 
 class ParseIssue(Enum):
     """
@@ -393,12 +398,12 @@ class FunctionInfo:
 
         for line in info:
             if line.startswith("output"):
-                outputs.append(Name(line.removeprefix("output").strip()))
+                outputs.append(Name(removeprefix(line, "output").strip()))
             elif line.startswith("size"):
-                size = ParamSize.parse(line.removeprefix("size").strip())
+                size = ParamSize.parse(removeprefix(line, "size").strip())
                 sizes.append(size)
             elif line.startswith("constraint"):
-                constraint = Constraint.parse(line.removeprefix("constraint").strip())
+                constraint = Constraint.parse(removeprefix(line, "constraint").strip())
                 constraints.append(constraint)
             else:
                 raise ParseError(f"invalid directive in props: {line.strip()}")
@@ -543,7 +548,7 @@ class FunctionReference:
             name = param.name
             c_type = param.type
 
-            param_Dict[name] = c_type
+            param_dict[name] = c_type
             if c_type.pointer_level == 0:
                 scalar_params.add(name)
             elif c_type.pointer_level == 1:
@@ -561,12 +566,12 @@ class FunctionReference:
             if not isinstance(constraint, ParamConstraint):
                 continue
 
-            if (constraint.var in array_params or param_Dict[
+            if (constraint.var in array_params or param_dict[
                 constraint.var].contents == "char") and constraint.op not in {"==", "!="}:
                 issues.add(ParseIssue.InvalidConstraint)
 
         for output in self.info.outputs:
-            if param_Dict[output].pointer_level == 0:
+            if param_dict[output].pointer_level == 0:
                 if fix:
                     self.info.outputs.remove(output)
                 else:
@@ -586,7 +591,7 @@ class FunctionReference:
             if isinstance(size, VarSize):
                 var = size.var
 
-                if param_Dict[var].contents not in {"int"}:
+                if param_dict[var].contents not in {"int"}:
                     issues.add(ParseIssue.GivenInvalidSize)
             elif isinstance(size, ConstSize):
                 if size.size < 0:
@@ -596,7 +601,7 @@ class FunctionReference:
                     issues.add(ParseIssue.GivenInvalidSize)
 
         for array in array_params - sized:
-            if fix and param_Dict[array] == CType("char", 1):
+            if fix and param_dict[array] == CType("char", 1):
                 default_str_size = 100
                 self.info.sizes.append(ConstSize(array, default_str_size))
             else:
