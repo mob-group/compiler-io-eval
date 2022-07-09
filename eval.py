@@ -31,10 +31,13 @@ def setup_impl(impl: os.DirEntry) -> str:
     with open(impl, "r") as orig:
         contents = orig.read()
 
-    if (m := re.match(r"\s*(\w+):", contents)) is None:
+    #if (m := re.match(r"\s*(\w+):", contents)) is None:
+    m = re.findall(r"\s*(\w+):", contents)
+    if len(m) == 0:
         raise InvalidImplementationError("could not find a function label")
 
-    func = m[1]
+    #func = m[1]
+    func = m[0]
     if not impl.name.startswith(func):
         lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
 

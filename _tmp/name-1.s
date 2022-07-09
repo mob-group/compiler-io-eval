@@ -1,0 +1,2 @@
+.global f
+.globl f .type f, @function f: .LFB0: .cfi_startproc endbr64 pushq %rbp .cfi_def_cfa_offset 16 .cfi_offset 6, -16 movq %rsp, %rbp .cfi_def_cfa_register 6 movl %edi, -4 %rbp movl -4 %rbp , %eax movl %eax, g %rip nop popq %rbp .cfi_def_cfa 7, 8 ret .cfi_endproc

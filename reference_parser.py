@@ -10,10 +10,10 @@ import lumberjack
 from helper_types import *
 from typing import Dict, List, Tuple, Set
 
-def removesuffix(input_string, suffix):
-    if suffix and input_string.endswith(suffix):
-        return input_string[:-len(suffix)]
-    return input_string
+def removeprefix(text, prefix):
+    if text.startswith(prefix):
+        return text[len(prefix):]
+    return text  # or whatever
 
 
 class ParseIssue(Enum):
