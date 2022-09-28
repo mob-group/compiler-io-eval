@@ -156,7 +156,7 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
                 if impl is None:
                     continue
                 impls.append((impl, impl_file))
-            except (AttributeError, CompilationError, UnsupportedTypeError) as e:
+            except (AttributeError, CompilationError, UnsupportedTypeError, OSError, InvalidImplementationError) as e:
                 print("uh oh----------------")
                 lumberjack.getLogger("error").error(str(e))
         print(f"impls: {len(impls)}")
