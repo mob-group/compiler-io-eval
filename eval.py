@@ -4,6 +4,7 @@ from datetime import datetime
 from textwrap import indent, dedent
 from typing import *
 from typing import Dict, List, Tuple, Set
+import random
 
 import lumberjack
 from evaluation import generate, Evaluator, Result, write_examples
@@ -144,7 +145,7 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
         try:
             ref = load_reference(ref_dir.path)
         except Exception as e:
-            lumberjack.getLogger("error").error(str(e))
+            lumberjack.getLogger("error").error(str(e))  # TODO: Here is where we get WRONG REFS
             print(e)
             continue
 
@@ -164,6 +165,7 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
             yield (ref, ref_dir), impls
         else:
             lumberjack.getLogger("error").warning(f"no valid implementations in {impldir}")
+            yield (ref, ref_dir), []
 
 
 class ReferenceResult:
@@ -319,8 +321,11 @@ def test_reference(reference: ReferenceFile, impls: List[ImplementationFile],
     ref, ref_dir = reference
     return ReferenceResult(ref_dir.name, [test_implementation(ref, impl, examples) for impl in impls])
 
+def set_seed(seed: int):
+    random.seed(seed)
 
-def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> List[ReferenceResult]:
+
+def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[ReferenceResult]:
     """
     Tests all implementations and their corresponding references on examples
 
@@ -330,13 +335,19 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> List[Refere
     :param impldir: the directory containing all implementations
     :param num_examples: the number of example to (attempt to) generate for each reference
     :param impl_exts: the valid file extensions for an implementation
+    :param seed: random seed
     """
 
     lumberjack.getLogger("general").info(f"testing beginning: {datetime.now():%d/%m/%Y %H:%M:%S}")
 
+    set_seed(seed)
+
     results = []
     for reference, impls in fetch(refdir, impldir, impl_exts):
         ref, ref_dir = reference
+        if len(impls) == 0:
+            results.append(ReferenceResult(ref_dir.name, []))
+            continue
         try:
             ref_impl = create_from(ref, os.path.join(ref_dir.path, "ref.c"))
 
@@ -347,6 +358,7 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts) -> List[Refere
             results.append(test_reference(reference, impls, examples))
         except Exception as e:
             lumberjack.getLogger("error").error(str(e))
+            #results.append(ReferenceResult(ref_dir.name, []))  # TODO: check if at least 1 was ok (didn't crash)
 
     return results
 
@@ -357,8 +369,9 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument("references", help="path to references")
     argparser.add_argument("implementations", help="path to implementations")
+    argparser.add_argument("--seed", type=int, default=0)
 
     args = argparser.parse_args()
 
-    results = test(args.references, args.implementations, 1, impl_exts=assembly_files)
+    results = test(args.references, args.implementations, 1, impl_exts=assembly_files, seed=args.seed)
     print(ReferenceResult.gen_report(results, True, partitioned=True))
