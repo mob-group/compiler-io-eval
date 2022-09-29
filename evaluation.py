@@ -298,11 +298,14 @@ class Evaluator:
         failures = []
 
         for example in examples:
-            failure = self.check_example(example)
-            if failure is None:
-                passes += 1
-            else:
-                failures.append(failure)
+            try:
+                failure = self.check_example(example)
+                if failure is None:
+                    passes += 1
+                else:
+                    failures.append(failure)
+            except Exception as e:  # TODO: check
+                failures.append(None)  #TODO
 
         return Result(passes, len(examples), failures)
 
