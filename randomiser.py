@@ -12,7 +12,8 @@ class Randomiser:
                  "bool": [True, False],
                  }
     def __init__(self, seed=None):
-        random.seed(seed)
+        if seed:
+            random.seed(seed)
 
     def random_int(self, min_val=None, max_val=None):
         defaults = Randomiser.defaults["int"]
