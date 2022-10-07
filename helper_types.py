@@ -7,7 +7,6 @@ tmp_dir = "_tmp"
 
 assembly_files = {".s", ".S"}
 c_files = {".c"}
-io_files = {".io"}
 
 # REGULAR TYPES
 

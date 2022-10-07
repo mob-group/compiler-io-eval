@@ -17,7 +17,7 @@ ReferenceFile = Tuple[FunctionReference, os.DirEntry]
 ImplementationFile = Tuple[Function, os.DirEntry]
 
 
-def setup_impl(impl: os.DirEntry) -> str:
+def setup_impl(impl: os.DirEntry, mod_to_eval: str) -> str:
     """
     Fixes an assembly file produced by the compiler
 
@@ -27,27 +27,35 @@ def setup_impl(impl: os.DirEntry) -> str:
     Throws an InvalidImplementationError if the function label can not be found.
 
     :param impl: the file to fix
+    :param mod_to_eval: Modality to eval, s or c
     :return: the path to the fixed file
     """
     with open(impl, "r") as orig:
         contents = orig.read()
 
-    # if (m := re.match(r"\s*(\w+):", contents)) is None:
-    m = re.findall(r"\s*(\w+):", contents)
-    if len(m) == 0:
-        raise InvalidImplementationError("could not find a function label")
+    if mod_to_eval == 's':
+        # if (m := re.match(r"\s*(\w+):", contents)) is None:
+        m = re.findall(r"\s*(\w+):", contents)
+        if len(m) == 0:
+            raise InvalidImplementationError("could not find a function label")
 
-    # func = m[1]
-    func = m[0]
-    if not impl.name.startswith(func):
-        lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
+        # func = m[1]
+        func = m[0]
+        if not impl.name.startswith(func):
+            lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
 
-    if not os.path.exists(tmp_dir):
-        os.makedirs(tmp_dir)
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
 
-    tmp_impl = os.path.join(tmp_dir, impl.name)
-    with open(tmp_impl, "w") as new:
-        new.write(f".global {func}\n{contents}")
+        tmp_impl = os.path.join(tmp_dir, impl.name)
+        with open(tmp_impl, "w") as new:
+            new.write(f".global {func}\n{contents}")
+
+    elif mod_to_eval == 'c':
+        # TODO: check different name in signature function name and change it?
+        tmp_impl = os.path.join(tmp_dir, impl.name)
+        with open(tmp_impl, "w") as new:
+            new.write(contents)
 
     return tmp_impl
 
@@ -98,7 +106,8 @@ def references(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
         yield ref, impls
 
 
-def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry) -> Optional[Function]:
+def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry,
+                        mod_to_eval) -> Optional[Function]:
     """
     Builds an executable function from a specific implementation
 
@@ -106,6 +115,7 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
 
     :param reference: the reference to use for the implementation
     :param path_to_implementation: the implementation to compile and build from
+    :param mod_to_eval: Modality to eval (s or c)
     :return: the resulting function, if it could be built
     """
     lib_name, _ = os.path.splitext(os.path.basename(path_to_implementation))
@@ -116,7 +126,7 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
         lumberjack.getLogger("error").error(f"raw file: {str(e)}")
 
     try:
-        new_path = setup_impl(path_to_implementation)
+        new_path = setup_impl(path_to_implementation, mod_to_eval=mod_to_eval)
         # for some reason it breaks if the retry compiles into the same file
         return create_from(reference, new_path, lib_path=lib_path[:-3] + "-retry.so")
     except (CompilationError, AttributeError) as e:
@@ -125,7 +135,7 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
     return None
 
 
-def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
+def fetch(refdir: str, impldir: str, mod_to_eval: str) -> Generator[
     Tuple[ReferenceFile, List[ImplementationFile]], None, None]:
     """
     Retrieves and builds all references and their implementations
@@ -137,9 +147,10 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
 
     :param refdir: the directory containing all references
     :param impldir: the directory containing all implementations
-    :param impl_exts: the valid file extensions for an implementation
+    :param mod_to_eval: Modality to evaluate (c or s)
     :return: a generator over references and their implementations, preserving file information
     """
+    impl_exts: Set[str] = assembly_files if mod_to_eval == 's' else c_files  # :param impl_exts: the valid file extensions for an implementation
     for ref_dir, impl_files in references(refdir, impldir, impl_exts):
         print(f"working on {ref_dir.name}")
         try:
@@ -152,7 +163,7 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
         impls = []
         for impl_file in impl_files:
             try:
-                impl = load_implementation(ref, impl_file)
+                impl = load_implementation(ref, impl_file, mod_to_eval)
 
                 if impl is None:
                     continue
@@ -342,22 +353,14 @@ def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) 
     assert arch in ['x86', 'arm']
     if arch == 'arm':
         raise NotImplemented(arch)
-    assert mod_to_eval in ['s', 'c', 'io']
-    if mod_to_eval in ['c', 'io']:
-        raise NotImplemented(mod_to_eval)
-    if mod_to_eval == 'c':
-        impl_exts = c_files
-    elif mod_to_eval == 's':
-        impl_exts = assembly_files
-    else:
-        impl_exts = io_files
+    assert mod_to_eval in ['s', 'c']
 
     lumberjack.getLogger("general").info(f"testing beginning: {datetime.now():%d/%m/%Y %H:%M:%S}")
 
     set_seed(seed)
 
     results = []
-    for reference, impls in fetch(refdir, impldir, impl_exts):
+    for reference, impls in fetch(refdir, impldir, mod_to_eval):
         ref, ref_dir = reference
         if len(impls) == 0:
             results.append(ReferenceResult(ref_dir.name, []))
@@ -385,8 +388,8 @@ if __name__ == '__main__':
     argparser.add_argument("implementations", help="path to implementations")
     argparser.add_argument("--seed", type=int, default=0)
     argparser.add_argument("--n", type=int, default=10, help="Number of IO tests per function")
-    argparser.add_argument("--arch", type=int, default='x86', help="Architecture")
-    argparser.add_argument("--mod-to-eval", type=str, default='s', help="Options: s, c, io")
+    argparser.add_argument("--arch", type=str, default='x86', help="Architecture")
+    argparser.add_argument("--mod-to-eval", type=str, default='s', help="Options: s, c")
 
     args = argparser.parse_args()
 
