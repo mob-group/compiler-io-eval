@@ -301,48 +301,11 @@ class ReferenceResult:
         :param verbose: whether to show full information on each test
         :param show_failures: whether to show failed tests cases for each test
         :param partitioned: set to :code:`True` to split the report up into passes, fails, and trivial cases
-        :return: the formatted report of all tests
+        :return: the DICT report of all tests
         """
 
-        def stringify_many(items: Iterable) -> str:
-            # assert verbose is not False and show_failures is not True  # just a meaningless use case
-            assert not (verbose and not show_failures)
-
-            return "\n".join(item.full(show_failures) if verbose else str(item) for item in items)
-
-        if partitioned:
-            partition = ReferenceResult.partition(results)
-            passes = partition["pass"]
-            fails = partition["fail"]
-            trivials = partition["trivial"]
-
-            res = dedent('''\
-                *** PASSES {n_pass}/{tests} ***
-
-                {passes}
-
-                *** FAILS {n_fail}/{tests} ***
-
-                {fails}
-
-                *** TRIVIAL {n_trivial}/{tests} ***
-
-                {trivials}\
-                ''').format(passes=stringify_many(passes),
-                            fails=stringify_many(fails),
-                            trivials=stringify_many(trivials),
-                            n_pass=len(passes),
-                            n_fail=len(fails),
-                            n_trivial=len(trivials),
-                            tests=len(results))
-        else:
-            res = stringify_many(results)
-
-        return dedent('''\
-            {res}
-
-            {summ}\
-            ''').format(res=res, summ=ReferenceResult.summary(results))
+        # TODO: # like gen_report, but returning a nice dict/json
+        pass
 
     @staticmethod
     def summary(results: list) -> str:
