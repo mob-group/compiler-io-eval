@@ -12,6 +12,7 @@ from examples import ExampleInstance
 from helper_types import *
 from reference_parser import load_reference, FunctionReference
 from runner import create_from, Function
+from metrics import Metrics
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
 ImplementationFile = Tuple[Function, os.DirEntry]
@@ -164,7 +165,6 @@ def fetch(refdir: str, impldir: str, mod_to_eval: str) -> Generator[
         for impl_file in impl_files:
             try:
                 impl = load_implementation(ref, impl_file, mod_to_eval)
-
                 if impl is None:
                     continue
                 impls.append((impl, impl_file))
@@ -203,8 +203,11 @@ class ReferenceResult:
     def __str__(self):
         status = "OK" if self.passed() else "NOT OK"
         passes = sum(1 for result in self.results if result.passed())
+        metrics = Metrics.reduce([r.metrics for r in self.results if r.passed()])
+        if not metrics:
+            metrics = 'NONE (TESTS NOT PASSED)'
 
-        return f"{self.name}: passed {passes}/{len(self.results)} tests ({status})"
+        return f"{self.name}: passed {passes}/{len(self.results)} tests ({status}) | REDUCED_METRICS: {metrics}"
 
     def full(self, show_failures: bool) -> str:
         """
@@ -290,6 +293,58 @@ class ReferenceResult:
         ''').format(res=res, summ=ReferenceResult.summary(results))
 
     @staticmethod
+    def gen_report_json(results: list, verbose: bool, show_failures: bool = True, partitioned: bool = True) -> Dict:
+        """
+        Formats a nice description of the results from many reference tests -> JSON
+
+        :param results: the reference results to display
+        :param verbose: whether to show full information on each test
+        :param show_failures: whether to show failed tests cases for each test
+        :param partitioned: set to :code:`True` to split the report up into passes, fails, and trivial cases
+        :return: the formatted report of all tests
+        """
+
+        def stringify_many(items: Iterable) -> str:
+            # assert verbose is not False and show_failures is not True  # just a meaningless use case
+            assert not (verbose and not show_failures)
+
+            return "\n".join(item.full(show_failures) if verbose else str(item) for item in items)
+
+        if partitioned:
+            partition = ReferenceResult.partition(results)
+            passes = partition["pass"]
+            fails = partition["fail"]
+            trivials = partition["trivial"]
+
+            res = dedent('''\
+                *** PASSES {n_pass}/{tests} ***
+
+                {passes}
+
+                *** FAILS {n_fail}/{tests} ***
+
+                {fails}
+
+                *** TRIVIAL {n_trivial}/{tests} ***
+
+                {trivials}\
+                ''').format(passes=stringify_many(passes),
+                            fails=stringify_many(fails),
+                            trivials=stringify_many(trivials),
+                            n_pass=len(passes),
+                            n_fail=len(fails),
+                            n_trivial=len(trivials),
+                            tests=len(results))
+        else:
+            res = stringify_many(results)
+
+        return dedent('''\
+            {res}
+
+            {summ}\
+            ''').format(res=res, summ=ReferenceResult.summary(results))
+
+    @staticmethod
     def summary(results: list) -> str:
         """
         :param results: a bunch of reference results
@@ -315,6 +370,8 @@ def test_implementation(ref: FunctionReference, implementation: ImplementationFi
     evaluator = Evaluator(ref, impl)
     result = evaluator.check(examples)
     result.name = impl_file.name
+
+    result.metrics = Metrics.create_metrics(ref, implementation)
 
     return result
 

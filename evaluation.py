@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from textwrap import indent, dedent
 from typing import Any
 from typing import Dict, List, Tuple, Set
-
+from metrics import Metrics
 import math
 
 import lumberjack
@@ -161,7 +161,8 @@ class Result:
     Contains the results of testing a series of inputs on a function
     """
 
-    def __init__(self, passes: int, tests: int, failures: List[Failure], name: str = None):
+    def __init__(self, passes: int, tests: int, failures: List[Failure], name: str = None,
+                 metrics: Optional[Metrics] = None):
         assert passes >= 0 and tests >= 0  # len(failures) is implicitly >= 0
         assert passes + len(failures) == tests
 
@@ -169,6 +170,7 @@ class Result:
         self.tests = tests
         self.failures = failures
         self.name = name
+        self.metrics = metrics
 
     def passed(self) -> bool:
         """
@@ -207,7 +209,8 @@ class Result:
     def __str__(self):
         status = "OK" if self.passed else "NOT OK"
         name = "" if self.name is None else f"{self.name}: "
-        return f"{name}passed {self.passes}/{self.tests} tests ({status})"
+        metrics = str(self.metrics) if self.metrics else ''
+        return f"{name}passed {self.passes}/{self.tests} tests ({status}) {metrics}"
 
 
 class Evaluator:
@@ -267,7 +270,7 @@ class Evaluator:
             except TypeError:
                 return False
 
-        result = run_safe(self.reference, self.runner.lib_path, example.inputs)
+        result = run_safe(self.reference, self.runner.lib_path, example.inputs, self.runner.original_code)
 
         if result is None:
             raise FunctionRunError(f"no value produced by {self.reference.name}")

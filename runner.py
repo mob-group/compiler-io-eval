@@ -193,7 +193,7 @@ class Function:
     An executable version of a C function
     """
 
-    def __init__(self, reference: FunctionReference, lib_path: str):
+    def __init__(self, reference: FunctionReference, lib_path: str, original_code: Optional[str] = None):
         if not (lib_path.startswith("./") or lib_path.startswith("/")):
             lib_path = f"./{lib_path}"
 
@@ -218,6 +218,8 @@ class Function:
             exe.restype = return_val.primitive()
 
         self.exe = exe
+
+        self.original_code = original_code
 
     def run(self, params: ParameterMapping):
         """
@@ -375,11 +377,11 @@ def create_from(reference: FunctionReference, path_to_compilable: str, lib_path:
 
     compile_lib(path_to_compilable, lib_path)
 
-    return Function(reference, lib_path)
+    return Function(reference, lib_path, path_to_compilable)
 
 
 def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping,
-                   queue: Queue):
+                   queue: Queue, original_impl_path: Optional[str] = None):
     """
     Builds a function, runs it on a set of inputs, and enqueues its result for later use
 
@@ -392,11 +394,13 @@ def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: Param
     The queue is used so that the values obtained by running the function can be accessed in the parent process.
 
     :param reference: the function reference to build the function from
-    :param path_to_lib: the path of the (already compiled) library to use
+    #:param path_to_lib: the path of the (already compiled) library to use
     :param inputs: the inputs to run the function on
     :param queue: the queue the results (return value and output parameter values) should be stored on
+
+    :param original_impl_path: needed for code metrics
     """
-    func = Function(reference, path_to_lib)
+    func = Function(reference, path_to_lib, original_impl_path)
 
     val = func.run(inputs)
     outputs = func.outputs()
@@ -404,7 +408,8 @@ def create_and_run(reference: FunctionReference, path_to_lib: str, inputs: Param
     queue.put((val, outputs))
 
 
-def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping) -> Optional[
+def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMapping,
+             path_to_orig_impl: Optional[str] = None) -> Optional[
     Tuple[AnyValue, ParameterMapping]]:
     """
     Runs a function on a set of inputs, sand-boxed in a separate process
@@ -412,11 +417,13 @@ def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMa
     :param reference: the reference of the function to run
     :param path_to_lib: the path of the (already compiled) library to use
     :param inputs: the inputs to run the function on
+    :path_to_orig_impl needed for code metrics
     :return: the results (return value and output parameter values) obtained from running the function
     """
     q = Queue()
 
-    p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q))
+    # p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q))
+    p = Process(target=create_and_run, args=(reference, path_to_lib, inputs, q, path_to_orig_impl))
     p.start()
     timeout = 2  # num. of seconds to wait
     p.join(timeout)
@@ -426,5 +433,6 @@ def run_safe(reference: FunctionReference, path_to_lib: str, inputs: ParameterMa
         return q.get_nowait()
     else:
         p.close()
+        path_to_lib = path_to_lib
         lumberjack.getLogger("error").warning(f"{path_to_lib} failed on an input")
         return None
