@@ -32,12 +32,12 @@ def setup_impl(impl: os.DirEntry) -> str:
     with open(impl, "r") as orig:
         contents = orig.read()
 
-    #if (m := re.match(r"\s*(\w+):", contents)) is None:
+    # if (m := re.match(r"\s*(\w+):", contents)) is None:
     m = re.findall(r"\s*(\w+):", contents)
     if len(m) == 0:
         raise InvalidImplementationError("could not find a function label")
 
-    #func = m[1]
+    # func = m[1]
     func = m[0]
     if not impl.name.startswith(func):
         lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
@@ -274,7 +274,7 @@ class ReferenceResult:
 
         return dedent('''\
         {res}
-        
+
         {summ}\
         ''').format(res=res, summ=ReferenceResult.summary(results))
 
@@ -321,11 +321,12 @@ def test_reference(reference: ReferenceFile, impls: List[ImplementationFile],
     ref, ref_dir = reference
     return ReferenceResult(ref_dir.name, [test_implementation(ref, impl, examples) for impl in impls])
 
+
 def set_seed(seed: int):
     random.seed(seed)
 
 
-def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[ReferenceResult]:
+def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) -> List[ReferenceResult]:
     """
     Tests all implementations and their corresponding references on examples
 
@@ -334,9 +335,22 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[
     :param refdir: the directory containing all references
     :param impldir: the directory containing all implementations
     :param num_examples: the number of example to (attempt to) generate for each reference
-    :param impl_exts: the valid file extensions for an implementation
+    :param mod_to_eval: The modality to evaluate (s, c, io).
     :param seed: random seed
+    :param arch: Architecture (x86 or arm)
     """
+    assert arch in ['x86', 'arm']
+    if arch == 'arm':
+        raise NotImplemented(arch)
+    assert mod_to_eval in ['s', 'c', 'io']
+    if mod_to_eval in ['c', 'io']:
+        raise NotImplemented(mod_to_eval)
+    if mod_to_eval == 'c':
+        impl_exts = c_files
+    elif mod_to_eval == 's':
+        impl_exts = assembly_files
+    else:
+        impl_exts = io_files
 
     lumberjack.getLogger("general").info(f"testing beginning: {datetime.now():%d/%m/%Y %H:%M:%S}")
 
@@ -358,7 +372,7 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[
             results.append(test_reference(reference, impls, examples))
         except Exception as e:
             lumberjack.getLogger("error").error(str(e))
-            #results.append(ReferenceResult(ref_dir.name, []))  # TODO: check if at least 1 was ok (didn't crash)
+            # results.append(ReferenceResult(ref_dir.name, []))  # TODO: check if at least 1 was ok (didn't crash)
 
     return results
 
@@ -370,8 +384,12 @@ if __name__ == '__main__':
     argparser.add_argument("references", help="path to references")
     argparser.add_argument("implementations", help="path to implementations")
     argparser.add_argument("--seed", type=int, default=0)
+    argparser.add_argument("--n", type=int, default=10, help="Number of IO tests per function")
+    argparser.add_argument("--arch", type=int, default='x86', help="Architecture")
+    argparser.add_argument("--mod-to-eval", type=str, default='s', help="Options: s, c, io")
 
     args = argparser.parse_args()
 
-    results = test(args.references, args.implementations, 1, impl_exts=assembly_files, seed=args.seed)
+    results = test(args.references, args.implementations, args.n, mod_to_eval=args.mod_to_eval, seed=args.seed,
+                   arch=args.arch)
     print(ReferenceResult.gen_report(results, True, partitioned=True))
