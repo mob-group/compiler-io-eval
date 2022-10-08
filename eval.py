@@ -179,6 +179,18 @@ def fetch(refdir: str, impldir: str, mod_to_eval: str) -> Generator[
             yield (ref, ref_dir), []
 
 
+from dataclasses import dataclass
+
+@dataclass
+class ReportDict:
+    passes: List
+    fails: List
+    trivials: List
+    total_passes: int
+    total_results: int
+
+
+
 class ReferenceResult:
     """
     A collection of results for a reference with multiple implementations
@@ -293,7 +305,7 @@ class ReferenceResult:
         ''').format(res=res, summ=ReferenceResult.summary(results))
 
     @staticmethod
-    def gen_report_json(results: list, verbose: bool, show_failures: bool = True, partitioned: bool = True) -> Dict:
+    def gen_report_json(results: list, partitioned: bool = True) -> Dict:
         """
         Formats a nice description of the results from many reference tests -> JSON
 
@@ -305,7 +317,22 @@ class ReferenceResult:
         """
 
         # TODO: # like gen_report, but returning a nice dict/json
-        pass
+
+
+        if partitioned:
+            partition = ReferenceResult.partition(results)
+            passes = partition["pass"]
+            fails = partition["fail"]
+            trivials = partition["trivial"]
+            total_passes = sum(1 for result in results if result.passed())
+            total_results = len(results)
+            from dataclasses import asdict
+            return asdict(ReportDict(passes=passes, fails=fails, trivials=trivials, total_passes=total_passes, total_results=total_results))
+
+
+        else:
+            assert RuntimeError('partitioned=False not implemented for dict')
+
 
     @staticmethod
     def summary(results: list) -> str:
@@ -416,3 +443,5 @@ if __name__ == '__main__':
     results = test(args.references, args.implementations, args.n, mod_to_eval=args.mod_to_eval, seed=args.seed,
                    arch=args.arch)
     print(ReferenceResult.gen_report(results, True, partitioned=True))
+    #results = ReferenceResult.gen_report_json(results, partitioned=True)
+    #print(results)
