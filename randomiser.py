@@ -5,7 +5,7 @@ from helper_types import ConstraintError
 from typing import Dict, List, Tuple, Set
 
 class Randomiser:
-    defaults = { "int": (0, 10),
+    defaults = { "int": (1, 10),
                  "float": (0, 10),
                  "double": (0, 10),
                  "char": " " + string.ascii_letters,
@@ -24,7 +24,9 @@ class Randomiser:
         if min_val > max_val:
             raise ConstraintError(f"can not constrain in {min_val} <= x <= {max_val}")
 
-        return random.randint(min_val, max_val)
+        ret = random.randint(min_val, max_val)
+
+        return ret
 
     def random_float(self, min_val=None, max_val=None):
         defaults = Randomiser.defaults["float"]
