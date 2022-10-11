@@ -373,7 +373,7 @@ def test_reference(reference: ReferenceFile, impls: List[ImplementationFile],
 
     :param reference: the function reference to use for the test
     :param impls: the function implementations to use for the test
-    :param examples: the examples to test the the implementations on
+    :param examples: the examples to test the implementations on
     :return: the result of the test
     """
     ref, ref_dir = reference
