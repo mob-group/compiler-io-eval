@@ -2,16 +2,29 @@ from helper_types import *
 from reference_parser import FunctionReference
 from runner import Function
 import os
+import sh
 from dataclasses import dataclass, asdict
 from typing import List
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
 ImplementationFile = Tuple[Function, os.DirEntry]
 
+def get_text_size(binary_path):
+    try:
+        outasm = sh.size(binary_path)
+    except BaseException as e:
+        return None
+
+    lines = [l.split() for l in outasm.split('\n')]
+    if lines[0][0]=='text':
+        return int(lines[1][0])
+
+    return None
 
 @dataclass
 class Metrics:
     n_chars: int
+    text_size: int
 
     @classmethod
     def create_metrics(cls, ref: FunctionReference, implementation: ImplementationFile) -> 'Metrics':
@@ -21,15 +34,16 @@ class Metrics:
         #print(implementation[0].original_code)
         with open(implementation[0].original_code, 'r') as f:
             n_chars = len(f.read())
-        return Metrics(n_chars=n_chars)#raise NotImplementedError
+        text_size = get_text_size(implementation[0].lib_path)
+        return Metrics(n_chars=n_chars, text_size=text_size)
 
     @classmethod
     def reduce(cls, metrics_list: List['Metrics']) -> Optional['Metrics']:
         if len(metrics_list) == 0:
             return None
-        reduced = Metrics(n_chars=min([m.n_chars for m in metrics_list]))
-        return reduced
-
+        n_chars = min([m.n_chars for m in metrics_list])
+        text_size=min([m.text_size for m in metrics_list])
+        return Metrics(n_chars=n_chars, text_size=text_size)
 
     #def __str__(self):
     #    return str(asdict(self))
