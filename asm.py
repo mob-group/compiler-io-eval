@@ -4,6 +4,8 @@ from abc import ABC
 from koda import Ok, Err, Result
 import re
 
+import uuid
+
 # For the moment, don't support MASM
 
 def get_text_size(binary_path):
@@ -58,10 +60,10 @@ class Compiler:
     def _get_func_asm(self, all_required_c_code, fname, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
         raise NotImplementedError
 
-    def get_text_size(self, all_required_c_code, fname, output_path=None) -> Result[FuncAsm, BaseException]:
-        return self._get_text_size(all_required_c_code, fname, output_path, arch=self.arch, o=self.o, bits=self.bits, flags=self.flags)
+    def get_text_size(self, all_required_c_code, output_path=None) -> Result[FuncAsm, BaseException]:
+        return self._get_text_size(all_required_c_code, output_path, arch=self.arch, o=self.o, bits=self.bits, flags=self.flags)
 
-    def _get_text_size(self, all_required_c_code, fname, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
+    def _get_text_size(self, all_required_c_code, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
         raise NotImplementedError
 
 
@@ -182,7 +184,7 @@ class GCC(GASCompiler):
         return Ok(func_asm)
 
 
-    def _get_text_size(self, all_required_c_code, fname, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
+    def _get_text_size(self, all_required_c_code, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
         lang = 'gas'  #  we don't support masm
         if arch == 'arm' and bits == 64:
             backend = self.arm_64
@@ -237,7 +239,7 @@ class Clang(GASCompiler):
         return Ok(func_asm)
 
 
-    def _get_text_size(self, all_required_c_code, fname, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
+    def _get_text_size(self, all_required_c_code, output_path, arch, o, bits, flags) -> Result[FuncAsm, BaseException]:
         if arch == 'x86' and bits == 64:
             backend = self.clang
         else:
