@@ -6,6 +6,10 @@ from typing import *
 from typing import Dict, List, Tuple, Set
 import random
 
+import numpy as np
+
+import asm
+
 import lumberjack
 from evaluation import generate, Evaluator, Result, write_examples
 from examples import ExampleInstance
@@ -342,7 +346,13 @@ class ReferenceResult:
         """
         passes = sum(1 for result in results if result.passed())
 
-        return f"{passes}/{len(results)} successful implementations"
+        reductions = []
+        for result in results:
+            if result.passed():
+                metrics = Metrics.reduce([r.metrics for r in result.results if r.passed()])
+                reductions.append( float(result.ref_text_size-metrics.text_size)/float(result.ref_text_size) )
+        reduction = np.mean( reductions )*100.0
+        return f"{passes}/{len(results)} successful implementations\n{reduction:.2f}% average reduction"
 
 
 def test_implementation(ref: FunctionReference, implementation: ImplementationFile,
@@ -419,7 +429,11 @@ def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) 
             examples = generate(ref, ref_impl, num_examples)
             write_examples(ref, examples, example_file)
 
-            results.append(test_reference(reference, impls, examples))
+            ref_text_size = asm.get_text_size(ref_impl.lib_path)
+
+            result = test_reference(reference, impls, examples)
+            result.ref_text_size = ref_text_size
+            results.append(result)
         except Exception as e:
             lumberjack.getLogger("error").error(str(e))
             # results.append(ReferenceResult(ref_dir.name, []))  # TODO: check if at least 1 was ok (didn't crash)
