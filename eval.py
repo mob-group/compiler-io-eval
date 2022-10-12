@@ -8,6 +8,8 @@ import random
 
 import numpy as np
 
+import uuid
+
 import asm
 
 import lumberjack
@@ -15,7 +17,7 @@ from evaluation import generate, Evaluator, Result, write_examples
 from examples import ExampleInstance
 from helper_types import *
 from reference_parser import load_reference, FunctionReference
-from runner import create_from, Function
+from runner import create_from, compile_lib, Function
 from metrics import Metrics
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
@@ -347,12 +349,29 @@ class ReferenceResult:
         passes = sum(1 for result in results if result.passed())
 
         reductions = []
+        #OzO0 = []
+        OsO0 = []
+        O3O0 = []
+        O2O0 = []
+        O1O0 = []
         for result in results:
             if result.passed():
                 metrics = Metrics.reduce([r.metrics for r in result.results if r.passed()])
-                reductions.append( float(result.ref_text_size-metrics.text_size)/float(result.ref_text_size) )
+                reductions.append( float(result.text_sizes['0']-metrics.text_size)/float(result.text_sizes['0']) )
+                #OzO0.append( float(result.text_sizes['0']-result.text_sizes['z'])/float(result.text_sizes['0']) )
+                OsO0.append( float(result.text_sizes['0']-result.text_sizes['s'])/float(result.text_sizes['0']) )
+                O3O0.append( float(result.text_sizes['0']-result.text_sizes['3'])/float(result.text_sizes['0']) )
+                O2O0.append( float(result.text_sizes['0']-result.text_sizes['2'])/float(result.text_sizes['0']) )
+                O1O0.append( float(result.text_sizes['0']-result.text_sizes['1'])/float(result.text_sizes['0']) )
         reduction = np.mean( reductions )*100.0
-        return f"{passes}/{len(results)} successful implementations\n{reduction:.2f}% average reduction"
+        #mOz = np.mean( OzO0 )*100.0
+        mOs = np.mean( OsO0 )*100.0
+        mO3 = np.mean( O3O0 )*100.0
+        mO2 = np.mean( O2O0 )*100.0
+        mO1 = np.mean( O1O0 )*100.0
+        reduction = np.mean( reductions )*100.0
+        #return f"{passes}/{len(results)} successful implementations\n{reduction:.2f}% average reduction\nOz/O0: {mOz:.2f}%\nOs/O0: {mOs:.2f}%\nO3/O0: {mO3:.2f}%\nO2/O0: {mO2:.2f}%\nO1/O0: {mO1:.2f}%"
+        return f"{passes}/{len(results)} successful implementations\n{reduction:.2f}% average reduction\nOs/O0: {mOs:.2f}%\nO3/O0: {mO3:.2f}%\nO2/O0: {mO2:.2f}%\nO1/O0: {mO1:.2f}%"
 
 
 def test_implementation(ref: FunctionReference, implementation: ImplementationFile,
@@ -429,10 +448,19 @@ def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) 
             examples = generate(ref, ref_impl, num_examples)
             write_examples(ref, examples, example_file)
 
-            ref_text_size = asm.get_text_size(ref_impl.lib_path)
 
             result = test_reference(reference, impls, examples)
-            result.ref_text_size = ref_text_size
+            #result.ref_text_size = asm.get_text_size(ref_impl.lib_path)
+            result.text_sizes = {}
+            for optLevel in ['0','1','2','3','s']: #,'z']:
+                filename = '/tmp/'+uuid.uuid4().hex + '.text_size.o'
+                compile_lib(os.path.join(ref_dir.path,"ref.c"), filename, optLevel)
+                size = asm.get_text_size(filename)
+                #cc = asm.Compiler.factory('gcc', bits=64, arch='x86', o=optLevel) #, flags=['-Dbool=char']) #, emit_llvm=False)
+                #print(str(ref_dir.path)+'/ref.c')
+                #with open(os.path.join(ref_dir.path,"ref.c"),"r") as f:
+                #    size = cc.get_text_size(f.read()).val
+                result.text_sizes[optLevel] = size
             results.append(result)
         except Exception as e:
             lumberjack.getLogger("error").error(str(e))
