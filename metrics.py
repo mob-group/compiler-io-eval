@@ -1,25 +1,13 @@
 from helper_types import *
 from reference_parser import FunctionReference
 from runner import Function
+import asm
 import os
-import sh
 from dataclasses import dataclass, asdict
 from typing import List
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
 ImplementationFile = Tuple[Function, os.DirEntry]
-
-def get_text_size(binary_path):
-    try:
-        outasm = sh.size(binary_path)
-    except BaseException as e:
-        return None
-
-    lines = [l.split() for l in outasm.split('\n')]
-    if lines[0][0]=='text':
-        return int(lines[1][0])
-
-    return None
 
 @dataclass
 class Metrics:
@@ -34,7 +22,7 @@ class Metrics:
         #print(implementation[0].original_code)
         with open(implementation[0].original_code, 'r') as f:
             n_chars = len(f.read())
-        text_size = get_text_size(implementation[0].lib_path)
+        text_size = asm.get_text_size(implementation[0].lib_path)
         return Metrics(n_chars=n_chars, text_size=text_size)
 
     @classmethod
