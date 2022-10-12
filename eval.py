@@ -6,18 +6,25 @@ from typing import *
 from typing import Dict, List, Tuple, Set
 import random
 
+import numpy as np
+
+import uuid
+
+import asm
+
 import lumberjack
 from evaluation import generate, Evaluator, Result, write_examples
 from examples import ExampleInstance
 from helper_types import *
 from reference_parser import load_reference, FunctionReference
-from runner import create_from, Function
+from runner import create_from, compile_lib, Function
+from metrics import Metrics
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
 ImplementationFile = Tuple[Function, os.DirEntry]
 
 
-def setup_impl(impl: os.DirEntry) -> str:
+def setup_impl(impl: os.DirEntry, mod_to_eval: str) -> str:
     """
     Fixes an assembly file produced by the compiler
 
@@ -27,27 +34,35 @@ def setup_impl(impl: os.DirEntry) -> str:
     Throws an InvalidImplementationError if the function label can not be found.
 
     :param impl: the file to fix
+    :param mod_to_eval: Modality to eval, s or c
     :return: the path to the fixed file
     """
     with open(impl, "r") as orig:
         contents = orig.read()
 
-    #if (m := re.match(r"\s*(\w+):", contents)) is None:
-    m = re.findall(r"\s*(\w+):", contents)
-    if len(m) == 0:
-        raise InvalidImplementationError("could not find a function label")
+    if mod_to_eval == 's':
+        # if (m := re.match(r"\s*(\w+):", contents)) is None:
+        m = re.findall(r"\s*(\w+):", contents)
+        if len(m) == 0:
+            raise InvalidImplementationError("could not find a function label")
 
-    #func = m[1]
-    func = m[0]
-    if not impl.name.startswith(func):
-        lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
+        # func = m[1]
+        func = m[0]
+        if not impl.name.startswith(func):
+            lumberjack.getLogger("error").warning(f"function name ({func}) differs from implementation name ({impl.name})")
 
-    if not os.path.exists(tmp_dir):
-        os.makedirs(tmp_dir)
+        if not os.path.exists(tmp_dir):
+            os.makedirs(tmp_dir)
 
-    tmp_impl = os.path.join(tmp_dir, impl.name)
-    with open(tmp_impl, "w") as new:
-        new.write(f".global {func}\n{contents}")
+        tmp_impl = os.path.join(tmp_dir, impl.name)
+        with open(tmp_impl, "w") as new:
+            new.write(f".global {func}\n{contents}")
+
+    elif mod_to_eval == 'c':
+        # TODO: check different name in signature function name and change it?
+        tmp_impl = os.path.join(tmp_dir, impl.name)
+        with open(tmp_impl, "w") as new:
+            new.write(contents)
 
     return tmp_impl
 
@@ -98,7 +113,8 @@ def references(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
         yield ref, impls
 
 
-def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry) -> Optional[Function]:
+def load_implementation(reference: FunctionReference, path_to_implementation: os.DirEntry,
+                        mod_to_eval) -> Optional[Function]:
     """
     Builds an executable function from a specific implementation
 
@@ -106,6 +122,7 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
 
     :param reference: the reference to use for the implementation
     :param path_to_implementation: the implementation to compile and build from
+    :param mod_to_eval: Modality to eval (s or c)
     :return: the resulting function, if it could be built
     """
     lib_name, _ = os.path.splitext(os.path.basename(path_to_implementation))
@@ -116,7 +133,7 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
         lumberjack.getLogger("error").error(f"raw file: {str(e)}")
 
     try:
-        new_path = setup_impl(path_to_implementation)
+        new_path = setup_impl(path_to_implementation, mod_to_eval=mod_to_eval)
         # for some reason it breaks if the retry compiles into the same file
         return create_from(reference, new_path, lib_path=lib_path[:-3] + "-retry.so")
     except (CompilationError, AttributeError) as e:
@@ -125,7 +142,7 @@ def load_implementation(reference: FunctionReference, path_to_implementation: os
     return None
 
 
-def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
+def fetch(refdir: str, impldir: str, mod_to_eval: str) -> Generator[
     Tuple[ReferenceFile, List[ImplementationFile]], None, None]:
     """
     Retrieves and builds all references and their implementations
@@ -137,9 +154,10 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
 
     :param refdir: the directory containing all references
     :param impldir: the directory containing all implementations
-    :param impl_exts: the valid file extensions for an implementation
+    :param mod_to_eval: Modality to evaluate (c or s)
     :return: a generator over references and their implementations, preserving file information
     """
+    impl_exts: Set[str] = assembly_files if mod_to_eval == 's' else c_files  # :param impl_exts: the valid file extensions for an implementation
     for ref_dir, impl_files in references(refdir, impldir, impl_exts):
         print(f"working on {ref_dir.name}")
         try:
@@ -152,8 +170,7 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
         impls = []
         for impl_file in impl_files:
             try:
-                impl = load_implementation(ref, impl_file)
-
+                impl = load_implementation(ref, impl_file, mod_to_eval)
                 if impl is None:
                     continue
                 impls.append((impl, impl_file))
@@ -166,6 +183,18 @@ def fetch(refdir: str, impldir: str, impl_exts: Set[str]) -> Generator[
         else:
             lumberjack.getLogger("error").warning(f"no valid implementations in {impldir}")
             yield (ref, ref_dir), []
+
+
+from dataclasses import dataclass
+
+@dataclass
+class ReportDict:
+    passes: List
+    fails: List
+    trivials: List
+    total_passes: int
+    total_results: int
+
 
 
 class ReferenceResult:
@@ -192,8 +221,11 @@ class ReferenceResult:
     def __str__(self):
         status = "OK" if self.passed() else "NOT OK"
         passes = sum(1 for result in self.results if result.passed())
+        metrics = Metrics.reduce([r.metrics for r in self.results if r.passed()])
+        if not metrics:
+            metrics = 'NONE (TESTS NOT PASSED)'
 
-        return f"{self.name}: passed {passes}/{len(self.results)} tests ({status})"
+        return f"{self.name}: passed {passes}/{len(self.results)} tests ({status}) | REDUCED_METRICS: {metrics}"
 
     def full(self, show_failures: bool) -> str:
         """
@@ -274,9 +306,39 @@ class ReferenceResult:
 
         return dedent('''\
         {res}
-        
+
         {summ}\
         ''').format(res=res, summ=ReferenceResult.summary(results))
+
+    @staticmethod
+    def gen_report_json(results: list, partitioned: bool = True) -> Dict:
+        """
+        Formats a nice description of the results from many reference tests -> JSON
+
+        :param results: the reference results to display
+        :param verbose: whether to show full information on each test
+        :param show_failures: whether to show failed tests cases for each test
+        :param partitioned: set to :code:`True` to split the report up into passes, fails, and trivial cases
+        :return: the DICT report of all tests
+        """
+
+        # TODO: # like gen_report, but returning a nice dict/json
+
+
+        if partitioned:
+            partition = ReferenceResult.partition(results)
+            passes = partition["pass"]
+            fails = partition["fail"]
+            trivials = partition["trivial"]
+            total_passes = sum(1 for result in results if result.passed())
+            total_results = len(results)
+            from dataclasses import asdict
+            return asdict(ReportDict(passes=passes, fails=fails, trivials=trivials, total_passes=total_passes, total_results=total_results))
+
+
+        else:
+            assert RuntimeError('partitioned=False not implemented for dict')
+
 
     @staticmethod
     def summary(results: list) -> str:
@@ -286,7 +348,30 @@ class ReferenceResult:
         """
         passes = sum(1 for result in results if result.passed())
 
-        return f"{passes}/{len(results)} successful implementations"
+        reductions = []
+        #OzO0 = []
+        OsO0 = []
+        O3O0 = []
+        O2O0 = []
+        O1O0 = []
+        for result in results:
+            if result.passed():
+                metrics = Metrics.reduce([r.metrics for r in result.results if r.passed()])
+                reductions.append( float(result.text_sizes['0']-metrics.text_size)/float(result.text_sizes['0']) )
+                #OzO0.append( float(result.text_sizes['0']-result.text_sizes['z'])/float(result.text_sizes['0']) )
+                OsO0.append( float(result.text_sizes['0']-result.text_sizes['s'])/float(result.text_sizes['0']) )
+                O3O0.append( float(result.text_sizes['0']-result.text_sizes['3'])/float(result.text_sizes['0']) )
+                O2O0.append( float(result.text_sizes['0']-result.text_sizes['2'])/float(result.text_sizes['0']) )
+                O1O0.append( float(result.text_sizes['0']-result.text_sizes['1'])/float(result.text_sizes['0']) )
+        reduction = np.mean( reductions )*100.0
+        #mOz = np.mean( OzO0 )*100.0
+        mOs = np.mean( OsO0 )*100.0
+        mO3 = np.mean( O3O0 )*100.0
+        mO2 = np.mean( O2O0 )*100.0
+        mO1 = np.mean( O1O0 )*100.0
+        reduction = np.mean( reductions )*100.0
+        #return f"{passes}/{len(results)} successful implementations\n{reduction:.2f}% average reduction\nOz/O0: {mOz:.2f}%\nOs/O0: {mOs:.2f}%\nO3/O0: {mO3:.2f}%\nO2/O0: {mO2:.2f}%\nO1/O0: {mO1:.2f}%"
+        return f"{passes}/{len(results)} successful implementations\n{reduction:.2f}% average reduction\nOs/O0: {mOs:.2f}%\nO3/O0: {mO3:.2f}%\nO2/O0: {mO2:.2f}%\nO1/O0: {mO1:.2f}%"
 
 
 def test_implementation(ref: FunctionReference, implementation: ImplementationFile,
@@ -305,6 +390,8 @@ def test_implementation(ref: FunctionReference, implementation: ImplementationFi
     result = evaluator.check(examples)
     result.name = impl_file.name
 
+    result.metrics = Metrics.create_metrics(ref, implementation)
+
     return result
 
 
@@ -315,17 +402,18 @@ def test_reference(reference: ReferenceFile, impls: List[ImplementationFile],
 
     :param reference: the function reference to use for the test
     :param impls: the function implementations to use for the test
-    :param examples: the examples to test the the implementations on
+    :param examples: the examples to test the implementations on
     :return: the result of the test
     """
     ref, ref_dir = reference
     return ReferenceResult(ref_dir.name, [test_implementation(ref, impl, examples) for impl in impls])
 
+
 def set_seed(seed: int):
     random.seed(seed)
 
 
-def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[ReferenceResult]:
+def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) -> List[ReferenceResult]:
     """
     Tests all implementations and their corresponding references on examples
 
@@ -334,16 +422,21 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[
     :param refdir: the directory containing all references
     :param impldir: the directory containing all implementations
     :param num_examples: the number of example to (attempt to) generate for each reference
-    :param impl_exts: the valid file extensions for an implementation
+    :param mod_to_eval: The modality to evaluate (s, c, io).
     :param seed: random seed
+    :param arch: Architecture (x86 or arm)
     """
+    assert arch in ['x86', 'arm']
+    if arch == 'arm':
+        raise NotImplemented(arch)
+    assert mod_to_eval in ['s', 'c']
 
     lumberjack.getLogger("general").info(f"testing beginning: {datetime.now():%d/%m/%Y %H:%M:%S}")
 
     set_seed(seed)
 
     results = []
-    for reference, impls in fetch(refdir, impldir, impl_exts):
+    for reference, impls in fetch(refdir, impldir, mod_to_eval):
         ref, ref_dir = reference
         if len(impls) == 0:
             results.append(ReferenceResult(ref_dir.name, []))
@@ -355,10 +448,23 @@ def test(refdir: str, impldir: str, num_examples: int, impl_exts, seed) -> List[
             examples = generate(ref, ref_impl, num_examples)
             write_examples(ref, examples, example_file)
 
-            results.append(test_reference(reference, impls, examples))
+
+            result = test_reference(reference, impls, examples)
+            #result.ref_text_size = asm.get_text_size(ref_impl.lib_path)
+            result.text_sizes = {}
+            for optLevel in ['0','1','2','3','s']: #,'z']:
+                filename = '/tmp/'+uuid.uuid4().hex + '.text_size.o'
+                compile_lib(os.path.join(ref_dir.path,"ref.c"), filename, optLevel)
+                size = asm.get_text_size(filename)
+                #cc = asm.Compiler.factory('gcc', bits=64, arch='x86', o=optLevel) #, flags=['-Dbool=char']) #, emit_llvm=False)
+                #print(str(ref_dir.path)+'/ref.c')
+                #with open(os.path.join(ref_dir.path,"ref.c"),"r") as f:
+                #    size = cc.get_text_size(f.read()).val
+                result.text_sizes[optLevel] = size
+            results.append(result)
         except Exception as e:
             lumberjack.getLogger("error").error(str(e))
-            #results.append(ReferenceResult(ref_dir.name, []))  # TODO: check if at least 1 was ok (didn't crash)
+            # results.append(ReferenceResult(ref_dir.name, []))  # TODO: check if at least 1 was ok (didn't crash)
 
     return results
 
@@ -370,8 +476,14 @@ if __name__ == '__main__':
     argparser.add_argument("references", help="path to references")
     argparser.add_argument("implementations", help="path to implementations")
     argparser.add_argument("--seed", type=int, default=0)
+    argparser.add_argument("--n", type=int, default=10, help="Number of IO tests per function")
+    argparser.add_argument("--arch", type=str, default='x86', help="Architecture")
+    argparser.add_argument("--mod-to-eval", type=str, default='s', help="Options: s, c")
 
     args = argparser.parse_args()
 
-    results = test(args.references, args.implementations, 1, impl_exts=assembly_files, seed=args.seed)
+    results = test(args.references, args.implementations, args.n, mod_to_eval=args.mod_to_eval, seed=args.seed,
+                   arch=args.arch)
     print(ReferenceResult.gen_report(results, True, partitioned=True))
+    #results = ReferenceResult.gen_report_json(results, partitioned=True)
+    #print(results)
