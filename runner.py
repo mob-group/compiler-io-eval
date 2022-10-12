@@ -322,7 +322,7 @@ class Function:
         return all(globals) and all(parameter)
 
 
-def compile_lib(path_to_compilable: str, lib_path: str):
+def compile_lib(path_to_compilable: str, lib_path: str, optLevel: str = '0'):
     """
     Compile a reference to a usable version
 
@@ -334,7 +334,7 @@ def compile_lib(path_to_compilable: str, lib_path: str):
     :param lib_path: the .so file to compile into
     """
     linker_flag = "soname" if sys.platform == "linux" else "install_name"
-    cmd = f"gcc -Wall -O0 -shared -fPIC -o {lib_path} {path_to_compilable}"
+    cmd = f"gcc -Wall -O{optLevel} -shared -fPIC -o {lib_path} {path_to_compilable}"
     stdout, stderr = utilities.run_command(cmd)
 
     if stderr:
