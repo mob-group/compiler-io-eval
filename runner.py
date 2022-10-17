@@ -321,6 +321,20 @@ class Function:
 
         return all(globals) and all(parameter)
 
+def compile_obj(path_to_compilable: str, obj_path: str, optLevel: str = '0'):
+    """
+    Compile a reference to a usable version
+
+    :param path_to_compilable: a function to compile, can be .c or .s
+    :param obj_path: the .o file to compile into
+    """
+    linker_flag = "soname" if sys.platform == "linux" else "install_name"
+    cmd = f"gcc -Wall -O{optLevel} -c -o {obj_path} {path_to_compilable}"
+    stdout, stderr = utilities.run_command(cmd)
+
+    if stderr:
+        lumberjack.getLogger("error").error(stderr)
+        raise CompilationError(path_to_compilable, lib_path)
 
 def compile_lib(path_to_compilable: str, lib_path: str, optLevel: str = '0'):
     """
