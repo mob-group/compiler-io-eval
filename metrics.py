@@ -1,8 +1,9 @@
 from helper_types import *
 from reference_parser import FunctionReference
-from runner import Function
+from runner import Function, compile_obj
 import asm
 import os
+import uuid
 from dataclasses import dataclass, asdict
 from typing import List
 
@@ -22,7 +23,12 @@ class Metrics:
         #print(implementation[0].original_code)
         with open(implementation[0].original_code, 'r') as f:
             n_chars = len(f.read())
-        text_size = asm.get_text_size(implementation[0].lib_path)
+
+        #text_size = asm.get_text_size(implementation[0].lib_path)
+        obj_filename = '/tmp/'+uuid.uuid4().hex + '.text_size.o'
+        compile_obj(implementation[0].original_code, obj_filename) 
+        text_size = asm.get_text_size(obj_filename)
+
         return Metrics(n_chars=n_chars, text_size=text_size)
 
     @classmethod
