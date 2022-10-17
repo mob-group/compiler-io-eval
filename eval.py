@@ -17,7 +17,7 @@ from evaluation import generate, Evaluator, Result, write_examples
 from examples import ExampleInstance
 from helper_types import *
 from reference_parser import load_reference, FunctionReference
-from runner import create_from, compile_lib, Function
+from runner import create_from, compile_lib, compile_obj, Function
 from metrics import Metrics
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
@@ -454,7 +454,8 @@ def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) 
             result.text_sizes = {}
             for optLevel in ['0','1','2','3','s']: #,'z']:
                 filename = '/tmp/'+uuid.uuid4().hex + '.text_size.o'
-                compile_lib(os.path.join(ref_dir.path,"ref.c"), filename, optLevel)
+                #compile_lib(os.path.join(ref_dir.path,"ref.c"), filename, optLevel)
+                compile_obj(os.path.join(ref_dir.path,"ref.c"), filename, optLevel)
                 size = asm.get_text_size(filename)
                 #cc = asm.Compiler.factory('gcc', bits=64, arch='x86', o=optLevel) #, flags=['-Dbool=char']) #, emit_llvm=False)
                 #print(str(ref_dir.path)+'/ref.c')
