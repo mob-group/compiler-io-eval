@@ -266,19 +266,20 @@ class Evaluator:
         AnyValue = Union[SomeValue, None]
 
         def check_value(expected_value: AnyValue, actual_value: AnyValue) -> bool:
-            if math.isnan(expected_value) and math.isnan(actual_value):
+            if expected_value is None and actual_value is None:
                 return True
-            # TODO: bool
             if type(expected_value) != type(actual_value):
                 return False
             if isinstance(expected_value, float):
+                if math.isnan(expected_value) and math.isnan(actual_value):
+                    return True
                 return math.isclose(expected_value, actual_value)
             if isinstance(expected_value, str) or isinstance(expected_value, int) or isinstance(expected_value, bool):
                 return expected_value == actual_value
             if len(expected_value) != len(actual_value):
                 return False
 
-            return all(map(check_value, zip(expected_value, actual_value)))
+            return all(map(check_value, expected_value, actual_value))
 
             try:
                 return math.isnan(expected_value) == math.isnan(actual_value)

@@ -19,9 +19,25 @@ from helper_types import *
 from reference_parser import load_reference, FunctionReference
 from runner import create_from, compile_lib, compile_obj, Function
 from metrics import Metrics
+#import repair
 
 ReferenceFile = Tuple[FunctionReference, os.DirEntry]
 ImplementationFile = Tuple[Function, os.DirEntry]
+
+FUNCS_IN_AIPLANS_BENCHMARK = {'min_elt', 'reverse', 'sum_of_squares', 'fourth_in_place', 'cube_in_place', 'length',
+                              'clamp', 'int_sqrt', 'array_sum', 'binary_mul_sum', 'sum_of_positives', 'replace_last',
+                              'max_elt', 'fact', 'last_elem', 'replace_first', 'diveq', 'prod_n_squared', 'search',
+                              'sum_elts', 'mirror_image', 'array_inc', 'triangle_prod', 'sum_n_squared', 'pluseq',
+                              'vmul', 'vsub', 'binary_digits', 'fib_n', 'min', 'sort', 'eq', 'dot', 'subeq', 'sum_n',
+                              'vneg', 'voffset', 'collatz', 'muleq_sca', 'triangle_sum', 'muleq',
+                              'subtract_of_min_reverse', 'sum_of_lists_multiplied_after_dividing_by_three',
+                              'add', 'last_zero_idx',
+                              'elementwise_sum_of_negated_sum_and_max',
+                              'subeq_sca', 'vfill', 'fact_fact', 'prod_sq_elts', 'diveq_sca', 'max', 'digits',
+                              'array_prod', 'sum_abs', 'vscal', 'prod_elts', 'vadd', 'reverse_int', 'digit_prod',
+                              'count_odds', 'negate', 'vcopy',
+                              'min_so_far_subtracted'}
+
 
 
 def setup_impl(impl: os.DirEntry, mod_to_eval: str) -> str:
@@ -159,6 +175,9 @@ def fetch(refdir: str, impldir: str, mod_to_eval: str) -> Generator[
     """
     impl_exts: Set[str] = assembly_files if mod_to_eval == 's' else c_files  # :param impl_exts: the valid file extensions for an implementation
     for ref_dir, impl_files in references(refdir, impldir, impl_exts):
+        if ref_dir.name not in FUNCS_IN_AIPLANS_BENCHMARK:
+            print('skipping', ref_dir.name)
+            continue
         print(f"working on {ref_dir.name}")
         try:
             ref = load_reference(ref_dir.path)
@@ -437,7 +456,11 @@ def test(refdir: str, impldir: str, num_examples: int, mod_to_eval, seed, arch) 
 
     results = []
     for reference, impls in fetch(refdir, impldir, mod_to_eval):
+
         ref, ref_dir = reference
+        #if ref_dir.name not in FUNCS_IN_AIPLANS_BENCHMARK:
+        #    print('skipping', ref_dir.name)
+        #    continue
         if len(impls) == 0:
             results.append(ReferenceResult(ref_dir.name, []))
             continue
@@ -480,11 +503,12 @@ if __name__ == '__main__':
     argparser.add_argument("--n", type=int, default=10, help="Number of IO tests per function")
     argparser.add_argument("--arch", type=str, default='x86', help="Architecture")
     argparser.add_argument("--mod-to-eval", type=str, default='s', help="Options: s, c")
+    #argparser.add_argument('--use-repair', action='store_true')
 
     args = argparser.parse_args()
 
     results = test(args.references, args.implementations, args.n, mod_to_eval=args.mod_to_eval, seed=args.seed,
-                   arch=args.arch)
+                   arch=args.arch)#, use_repair=args.use_repair)
     print(ReferenceResult.gen_report(results, True, partitioned=True))
     #results = ReferenceResult.gen_report_json(results, partitioned=True)
     #print(results)
